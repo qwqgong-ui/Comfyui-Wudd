@@ -1,11 +1,12 @@
-// web/dynamic_ports.js
-import { app } from "../../scripts/app.js";
+
+// 将 import { app } from "../../scripts/app.js"; 改为：
+import { app } from "/scripts/app.js";
 
 app.registerExtension({
     name: "Wudd.MultiSaveSafe",
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name === "WuddMultiSaveImage") {
-            
+
             // 1. 安全且动态的连线逻辑
             const onConnectionsChange = nodeType.prototype.onConnectionsChange;
             nodeType.prototype.onConnectionsChange = function (type, index, connected) {
@@ -31,10 +32,10 @@ app.registerExtension({
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 if (onNodeCreated) onNodeCreated.apply(this, arguments);
-                
+
                 try {
                     const extWidget = this.widgets?.find(w => w.name === "extension");
-                    
+
                     // 预定义 JPEGli 专属组件的原始类型，防止被永久设为 hidden
                     const jpegliWidgets = {
                         "quality": "number",
@@ -42,18 +43,18 @@ app.registerExtension({
                         "enable_xyb": "toggle",
                         "chroma_subsampling": "combo"
                     };
-                    
+
                     const refresh = () => {
                         if (!this.widgets) return;
                         const isJpegli = extWidget?.value === "jpegli";
-                        
+
                         this.widgets.forEach(w => {
                             if (jpegliWidgets[w.name] !== undefined) {
                                 // 如果是 jpegli 就恢复原本类型，否则隐藏
                                 w.type = isJpegli ? jpegliWidgets[w.name] : "hidden";
                             }
                         });
-                        
+
                         // 强制刷新节点高度以适配隐藏的组件
                         if (this.computeSize) {
                             const newSize = this.computeSize();
@@ -64,10 +65,20 @@ app.registerExtension({
                     };
 
                     if (extWidget) {
-                        extWidget.callback = refresh;
-                        // 延迟 100ms 执行以确保节点初始化完成
+                        // 缓存 ComfyUI 原始的 callback
+                        const origCallback = extWidget.callback;
+
+                        extWidget.callback = function () {
+                            // 先执行你的刷新逻辑
+                            refresh();
+                            // 再执行 ComfyUI 官方的同步逻辑
+                            if (origCallback) {
+                                return origCallback.apply(this, arguments);
+                            }
+                        };
                         setTimeout(refresh, 100);
                     }
+                    
                 } catch (e) { console.error("Wudd Widget Error:", e); }
             };
         }
