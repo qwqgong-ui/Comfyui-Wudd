@@ -5,55 +5,87 @@ app.registerExtension({
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name === "WuddMultiSaveImage") {
             
-            // 1. 安全的连线逻辑
+            // ==========================================
+            // 1. 极致安全的动态端口逻辑 (防死循环、完美兼容复制)
+            // ==========================================
             const onConnectionsChange = nodeType.prototype.onConnectionsChange;
-            nodeType.prototype.onConnectionsChange = function (type, index, connected) {
-                if (onConnectionsChange) {
-                    onConnectionsChange.apply(this, arguments);
-                }
-                if (type === 1 && this.inputs) {
+            nodeType.prototype.onConnectionsChange = function (type, index, connected, link_info) {
+                if (onConnectionsChange) onConnectionsChange.apply(this, arguments);
+                
+                if (this.__isUpdatingPorts) return;
+                this.__isUpdatingPorts = true;
+                
+                // type 1 代表 INPUT。确保只处理输入端口的连线
+                if (type === 1 && this.inputs && this.inputs.length > 0) {
                     try {
-                        if (connected && index === this.inputs.length - 1) {
+                        // 逻辑 A：清理尾部多余的空闲端口 (始终保持最后只有 1 个空端口)
+                        while (this.inputs.length > 1 && 
+                               !this.inputs[this.inputs.length - 1].link && 
+                               !this.inputs[this.inputs.length - 2].link) {
+                            this.removeInput(this.inputs.length - 1);
+                        }
+                        
+                        // 逻辑 B：如果最后一个端口被连上了，就自动新增一个空端口
+                        const lastInput = this.inputs[this.inputs.length - 1];
+                        if (lastInput && lastInput.link) {
                             this.addInput("image_" + (this.inputs.length + 1), "IMAGE");
                         }
-                        if (!connected && this.inputs.length > 1) {
-                            while (this.inputs.length > 1 && !this.inputs[this.inputs.length - 1].link && !this.inputs[this.inputs.length - 2].link) {
-                                this.removeInput(this.inputs.length - 1);
-                            }
-                        }
-                    } catch (e) {
-                        console.error("Wudd Ports Error:", e);
+                    } catch (e) { 
+                        console.error("Wudd Ports Error:", e); 
                     }
                 }
+                
+                this.__isUpdatingPorts = false;
             };
 
-            // 2. 安全的显隐逻辑与回调修复
+            // ==========================================
+            // 2. 极致安全的组件显隐逻辑 (防复制卡死版)
+            // ==========================================
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
-                if (onNodeCreated) {
-                    onNodeCreated.apply(this, arguments);
-                }
+                if (onNodeCreated) onNodeCreated.apply(this, arguments);
                 
                 try {
                     const extWidget = this.widgets?.find(w => w.name === "extension");
-                    const targetNames = ["quality", "progressive", "enable_xyb"];
+                    const targetNames = ["quality", "progressive", "enable_xyb", "chroma_subsampling"];
                     
                     const refresh = () => {
+                        if (!this.widgets) return;
                         const isJpegli = extWidget?.value === "jpegli";
-                        this.widgets?.forEach(w => {
+                        let visibilityChanged = false; // 增加状态锁：只在状态真发生改变时才重绘
+
+                        this.widgets.forEach(w => {
                             if (targetNames.includes(w.name)) {
-                                w.type = isJpegli ? (w.name === "quality" ? "number" : "toggle") : "hidden";
-                                // 标准的隐藏组件方法，防止 UI 出现空白缝隙
-                                if (w.type === "hidden") {
-                                    w.computeSize = () => [0, -4];
+                                // 初始化并缓存原生属性
+                                if (w.origType === undefined) {
+                                    w.origType = w.type;
+                                    w.origComputeSize = w.computeSize;
+                                }
+                                
+                                if (isJpegli) {
+                                    if (w.type !== w.origType) {
+                                        w.type = w.origType;
+                                        w.computeSize = w.origComputeSize;
+                                        visibilityChanged = true;
+                                    }
                                 } else {
-                                    delete w.computeSize;
+                                    if (w.type !== "hidden") {
+                                        w.type = "hidden";
+                                        w.computeSize = () => [0, -4];
+                                        visibilityChanged = true;
+                                    }
                                 }
                             }
                         });
-                        // 刷新后让节点重新计算自身高度
-                        if (this.setSize && this.computeSize) {
-                            this.setSize(this.computeSize());
+                        
+                        // 【核心修复】：将尺寸计算推迟到引擎克隆生命周期结束之后，避开死锁！
+                        if (visibilityChanged && this.setSize && this.computeSize) {
+                            setTimeout(() => {
+                                try {
+                                    this.setSize(this.computeSize());
+                                    if (this.setDirtyCanvas) this.setDirtyCanvas(true, true);
+                                } catch(e) {}
+                            }, 10);
                         }
                     };
 
@@ -61,15 +93,13 @@ app.registerExtension({
                         const origCallback = extWidget.callback; 
                         extWidget.callback = function() {
                             refresh(); 
-                            if (origCallback) {
-                                return origCallback.apply(this, arguments); 
-                            }
+                            if (origCallback) return origCallback.apply(this, arguments); 
                         };
-                        // 稍微延迟一下触发初始状态的刷新
+                        // 初始化时也异步执行，确保节点已经安全挂载
                         setTimeout(refresh, 50);
                     }
-                } catch (e) {
-                    console.error("Wudd Widget Error:", e);
+                } catch (e) { 
+                    console.error("Wudd Widget Error:", e); 
                 }
             };
         }

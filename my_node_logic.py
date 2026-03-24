@@ -1,4 +1,3 @@
-# my_node_logic.py
 import os
 import subprocess
 import numpy as np
@@ -10,7 +9,6 @@ class WuddMultiSaveImage:
     def __init__(self):
         self.output_dir = folder_paths.get_output_directory()
         self.type = "output"
-        # 指向官方静态包 cjpegli.exe 的路径
         self.cjpegli_exe = os.path.join(os.path.dirname(__file__), "jxl-x64-windows-static", "bin", "cjpegli.exe")
 
     @classmethod
@@ -23,7 +21,8 @@ class WuddMultiSaveImage:
                 "quality": ("INT", {"default": 90, "min": 1, "max": 100}),
                 "progressive": ("BOOLEAN", {"default": True}),
                 "enable_xyb": ("BOOLEAN", {"default": False}),
-                "chroma_subsampling": (["444", "420"], {"default": "444"}), # 新增: 色度子采样
+                # 新增色度采样选项
+                "chroma_subsampling": (["444", "440", "422", "420"],),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
@@ -33,21 +32,14 @@ class WuddMultiSaveImage:
     OUTPUT_NODE = True  
     CATEGORY = "Wudd Nodes"
 
-    def save_images(self, filename_prefix="Wudd_Img", extension="png", quality=90, progressive=True, enable_xyb=False, chroma_subsampling="444", **kwargs):
+    def save_images(self, image_1, filename_prefix="Wudd_Img", extension="png", quality=90, progressive=True, enable_xyb=False, chroma_subsampling="444", **kwargs):
         full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(filename_prefix, self.output_dir, 100, 100)
         results = list()
-        
-        # 将明确的 image_1 放入字典，并合并动态传入的 kwargs (image_2, image_3...)
-        all_images = {"image_1": kwargs.pop("image_1", None), **kwargs}
+        all_images = {"image_1": image_1, **kwargs}
         
         for key, images in all_images.items():
-            if not key.startswith("image_") or images is None: 
-                continue
-            
-            # 解析序列号，例如 "image_2" -> "2"
-            parts = key.split("_")
-            seq_num = parts[1] if len(parts) > 1 else "1"
-            
+            if not key.startswith("image_") or images is None: continue
+            seq_num = key.split("_")[1]
             for batch_num, image in enumerate(images):
                 i_data = (255. * image.cpu().numpy()).clip(0, 255).astype(np.uint8)
                 img_pil = Image.fromarray(i_data)
@@ -59,27 +51,34 @@ class WuddMultiSaveImage:
                 if extension == "png":
                     img_pil.save(file_path, compress_level=4)
                 else:
-                    # JPEGli 编码逻辑
                     temp_png = os.path.join(full_output_folder, f".tmp_{uuid.uuid4()}.png")
                     img_pil.save(temp_png)
                     
-                    cmd = [self.cjpegli_exe, temp_png, file_path, "-q", str(quality)]
-                    if progressive: cmd.append("-p")
-                    if enable_xyb: cmd.append("--xyb")
+                    cmd = [self.cjpegli_exe, temp_png, file_path, "--quality", str(quality)]
                     
-                    # 添加色度子采样参数
+                    # 修复 1：正确的渐进式参数
+                    if progressive:
+                        cmd.extend(["-p", "2"])
+                    else:
+                        cmd.extend(["-p", "0"])
+                        
+                    # 修复 2：只有 --xyb，不要传 --no-xyb
+                    if enable_xyb: 
+                        cmd.append("--xyb")
+                        
+                    # 修复 3：正确传入色度采样
                     cmd.append(f"--chroma_subsampling={chroma_subsampling}")
 
                     try:
-                        subprocess.run(cmd, check=True, capture_output=True, shell=False)
-                    except Exception as e:
-                        print(f"[WuddMultiSave] cjpegli 压缩失败，回退至原生 PIL 保存。错误信息: {e}")
+                        # 增加 capture_output=True 和 text=True 方便获取真实的报错信息
+                        subprocess.run(cmd, check=True, capture_output=True, text=True, shell=False)
+                    except subprocess.CalledProcessError as e:
+                        # 把 cjpegli 的真实报错打在终端，不再悄悄失败！
+                        print(f"[Wudd Node Error] cjpegli fail: {e.stderr}")
                         img_pil.save(file_path, quality=quality)
                     finally:
-                        if os.path.exists(temp_png): 
-                            os.remove(temp_png)
+                        if os.path.exists(temp_png): os.remove(temp_png)
 
                 results.append({"filename": file_name, "subfolder": subfolder, "type": self.type})
                 counter += 1
-                
         return { "ui": { "images": results } }
