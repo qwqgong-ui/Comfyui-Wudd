@@ -82,3 +82,26 @@ class WuddMultiSaveImage:
                 results.append({"filename": file_name, "subfolder": subfolder, "type": self.type})
                 counter += 1
         return { "ui": { "images": results } }
+
+class WuddTextSplitter:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "text": ("STRING", {"multiline": True, "default": ""}),
+                "index": ("INT", {"default": 0, "min": 0, "max": 99999}),
+            }
+        }
+    
+    RETURN_TYPES = ("STRING",)
+    FUNCTION = "split_text"
+    CATEGORY = "Wudd Nodes"
+
+    def split_text(self, text, index):
+        # 使用 splitlines() 自动处理 \n 或 \r\n，并移除行尾换行符
+        lines = text.splitlines()
+        
+        if 0 <= index < len(lines):
+            return (lines[index],)
+        
+        return ("",)
