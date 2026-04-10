@@ -1,48 +1,47 @@
-Markdown
 # ComfyUI-Wudd
 
-A powerful and robust custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) that provides advanced multi-image saving capabilities, featuring state-of-the-art **Jpegli** compression.
+A powerful and robust custom node suite for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) featuring advanced image saving and utility nodes.
 
 ## ✨ Features
 
-* **Dynamic Input Ports**: No need for multiple save nodes or complicated batching. The "Wudd Multi Save" node automatically generates a new input port every time you connect an image, allowing you to save as many images as you want simultaneously. Safe for node duplication (Ctrl+C/V) and highly stable!
-* **Advanced Jpegli Support**: Integrates Google's highly efficient `cjpegli` encoder, offering superior JPEG image quality at smaller file sizes compared to standard encoders.
-* **Fine-Grained Compression Control**: When saving as `jpegli`, you have full control over:
-    * Quality (1-100)
-    * Progressive Encoding
-    * XYB Color Space toggling
-    * Chroma Subsampling (444, 440, 422, 420)
-* **Smart & Clean UI**: The node features a dynamic interface. Advanced Jpegli settings will automatically hide when you select the standard `png` format, keeping your workspace clean and clutter-free.
+### 🖼️ Wudd Multi Save
+* **Dynamic Input Ports**: No need for multiple save nodes or complicated batching. The node automatically generates a new input port every time you connect an image.
+* **Advanced Jpegli Support**: Integrates Google's highly efficient `cjpegli` encoder for superior JPEG quality at smaller file sizes.
+* **Fine-Grained Compression Control**: Full control over quality, progressive encoding, XYB color space, and chroma subsampling.
+* **Smart & Clean UI**: Advanced settings dynamically hide when saving as standard PNG.
+
+### 📝 Wudd Text Splitter
+* **Line-based Splitting**: Easily manage multi-line text blocks.
+* **Index Selection**: Extract specific lines by their index (0-based).
+* **Robust & Safe**: Returns an empty string instead of an error if the index is out of bounds.
 
 ## 🚀 Installation
 
 1. Navigate to your ComfyUI `custom_nodes` directory:
    ```bash
    cd ComfyUI/custom_nodes/
-Clone this repository:
+   ```
+2. Clone this repository:
+   ```bash
+   git clone https://github.com/qwqgong-ui/Comfyui-Wudd.git
+   ```
+3. Restart ComfyUI.
 
-Bash
-git clone [https://github.com/qwqgong-ui/Comfyui-Wudd.git](https://github.com/qwqgong-ui/Comfyui-Wudd.git)
-Restart ComfyUI.
+## ⚙️ Parameters
 
-(Note: Ensure the folder is named exactly Comfyui-Wudd or ComfyUI-Wudd directly inside custom_nodes without extra nested folders.)
+### Wudd Multi Save
+- **image_1, image_2, ...**: Connect images here. Ports spawn dynamically.
+- **filename_prefix**: Prefix for saved files (default: `Wudd_Img`).
+- **extension**: Output format (`png` or `jpegli`).
+- **Jpegli Settings** (Visible when `jpegli` is selected):
+    - `quality`: 1-100.
+    - `progressive`: Toggle progressive JPEG.
+    - `enable_xyb`: Toggle XYB color space.
+    - `chroma_subsampling`: `444`, `440`, `422`, `420`.
 
-⚙️ Parameters
-image_1, image_2, ...: Connect the images you want to save here. Ports will spawn dynamically.
+### Wudd Text Splitter
+- **text**: Multi-line string input.
+- **index**: The line number to extract (starts at 0).
 
-filename_prefix: The prefix for your saved files (default: Wudd_Img).
-
-extension: Choose the output format. Options are png or jpegli.
-
-Jpegli Exclusive Settings (Visible only when extension is set to jpegli):
-
-quality: Sets the image quality from 1 to 100 (default: 90).
-
-progressive: Enables progressive JPEG rendering for smoother web loading.
-
-enable_xyb: Enables the XYB color space for perceptual quality improvements.
-
-chroma_subsampling: Adjusts color data compression. Options include 444 (highest quality/no subsampling), 440, 422, and 420 (highest compression).
-
-⚠️ Notes
-OS Compatibility: The current Jpegli compression relies on a bundled pre-compiled 64-bit Windows executable (jxl-x64-windows-static/bin/cjpegli.exe). Jpegli encoding will seamlessly fallback to standard PIL JPEG saving if the executable fails to run on non-Windows environments. PNG saving works univers
+## ⚠️ Notes
+**OS Compatibility**: Jpegli compression relies on a bundled pre-compiled 64-bit Windows executable (`cjpegli.exe`). It will seamlessly fallback to standard PIL JPEG saving on non-Windows environments. PNG saving works universally.
