@@ -39,7 +39,26 @@ app.registerExtension({
                 this.__isUpdatingPorts = false;
             };
 
-            // 2. Jpegli 相关 widget 显隐逻辑
+            // 2. 加载旧工作流时修复因 widget 版本迭代导致的值错位
+            const COMBO_DEFAULTS = {
+                save_mode:          { valid: ["append", "overwrite"],          def: "append" },
+                extension:          { valid: ["png", "jpegli"],                def: "png"    },
+                chroma_subsampling: { valid: ["444", "440", "422", "420"],     def: "444"    },
+            };
+            const onConfigure = nodeType.prototype.onConfigure;
+            nodeType.prototype.onConfigure = function (config) {
+                if (onConfigure) onConfigure.apply(this, arguments);
+                if (!this.widgets) return;
+                this.widgets.forEach(w => {
+                    const spec = COMBO_DEFAULTS[w.name];
+                    if (spec && !spec.valid.includes(w.value)) {
+                        console.warn(`[Wudd] widget "${w.name}" had invalid value "${w.value}", reset to "${spec.def}"`);
+                        w.value = spec.def;
+                    }
+                });
+            };
+
+            // 3. Jpegli 相关 widget 显隐逻辑
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 if (onNodeCreated) onNodeCreated.apply(this, arguments);
