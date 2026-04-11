@@ -31,13 +31,16 @@ class WuddMultiSaveImage:
         return {
             "required": {
                 "image_1": ("IMAGE",),
-                "filename_prefix": ("STRING", {"default": "Wudd_Img"}),
                 "save_mode": (["append", "overwrite"],),
                 "extension": (["png", "jpegli"],),
                 "quality": ("INT", {"default": 90, "min": 1, "max": 100}),
                 "progressive": ("BOOLEAN", {"default": True}),
                 "enable_xyb": ("BOOLEAN", {"default": False}),
                 "chroma_subsampling": (["444", "440", "422", "420"],),
+            },
+            "optional": {
+                # optional 使得该 widget 既保留输入框，又可直接接 STRING 节点
+                "filename_prefix": ("STRING", {"default": "Wudd_Img"}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
