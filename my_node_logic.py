@@ -90,6 +90,7 @@ class WuddTextSplitter:
             "required": {
                 "text": ("STRING", {"multiline": True, "default": ""}),
                 "index": ("INT", {"default": 0, "min": 0, "max": 99999}),
+                "skip_empty": ("BOOLEAN", {"default": False}),
             }
         }
     
@@ -97,9 +98,14 @@ class WuddTextSplitter:
     FUNCTION = "split_text"
     CATEGORY = "Wudd Nodes"
 
-    def split_text(self, text, index):
+    def split_text(self, text, index, skip_empty=False):
         # 使用 splitlines() 自动处理 \n 或 \r\n，并移除行尾换行符
         lines = text.splitlines()
+        
+        if skip_empty:
+            # 过滤掉空行（以及只包含空白字符的行，视需求而定，这里通常指完全空行或strip后为空）
+            # 用户说“空行跳过”，通常指 strip() 之后为空的行
+            lines = [line for line in lines if line.strip()]
         
         if 0 <= index < len(lines):
             return (lines[index],)
