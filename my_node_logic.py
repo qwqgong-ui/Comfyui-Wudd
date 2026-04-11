@@ -21,7 +21,6 @@ class WuddMultiSaveImage:
         self.cjpegli_exe = os.path.join(
             os.path.dirname(__file__), "jxl-x64-windows-static", "bin", exe_name
         )
-        # 启动时检测一次，避免每张图都去碰一次文件系统
         self.cjpegli_available = os.path.isfile(self.cjpegli_exe)
         if not self.cjpegli_available:
             print(f"[Wudd] cjpegli not found at {self.cjpegli_exe}; "
@@ -33,6 +32,7 @@ class WuddMultiSaveImage:
             "required": {
                 "image_1": ("IMAGE",),
                 "filename_prefix": ("STRING", {"default": "Wudd_Img"}),
+                "save_mode": (["append", "overwrite"],),
                 "extension": (["png", "jpegli"],),
                 "quality": ("INT", {"default": 90, "min": 1, "max": 100}),
                 "progressive": ("BOOLEAN", {"default": True}),
@@ -58,11 +58,10 @@ class WuddMultiSaveImage:
             return 10 ** 9
 
     @staticmethod
-    def _find_next_counter(folder, filename, ext):
-        """扫描 folder 中已存在的 {filename}.NNNNN.{ext} 文件，返回下一个可用编号。
-        get_save_image_path 只认 _ 分隔符，我们用 . 所以要自己扫。"""
+    def _find_next_run(folder, filename, ext):
+        """扫描追加模式的已有文件 {filename}.NNNNN.NN.{ext}，返回下一批次编号。"""
         pattern = re.compile(
-            rf"^{re.escape(filename)}\.(\d+)\.{re.escape(ext)}$",
+            rf"^{re.escape(filename)}\.(\d+)\.\d+\.{re.escape(ext)}$",
             re.IGNORECASE,
         )
         max_n = 0
@@ -114,7 +113,6 @@ class WuddMultiSaveImage:
             "progressive": bool(progressive),
             "optimize": True,
         }
-        # PIL 只认 444/422/420，440 没有对应值——回退到默认即可
         sub_map = {"444": 0, "422": 1, "420": 2}
         if chroma_subsampling in sub_map:
             save_kwargs["subsampling"] = sub_map[chroma_subsampling]
@@ -138,7 +136,6 @@ class WuddMultiSaveImage:
             self._pil_jpeg_fallback(img_pil, file_path, quality, progressive,
                                     chroma_subsampling, "cjpegli error")
         except (FileNotFoundError, OSError) as e:
-            # cjpegli 启动失败（权限、路径、跨平台等）——这是原版代码漏掉的分支
             print(f"[Wudd] cjpegli not runnable: {e}")
             self._pil_jpeg_fallback(img_pil, file_path, quality, progressive,
                                     chroma_subsampling, "cjpegli unavailable")
@@ -149,25 +146,29 @@ class WuddMultiSaveImage:
                 except OSError:
                     pass
 
+    def _do_save(self, img_pil, file_path, extension, png_metadata,
+                 folder, quality, progressive, enable_xyb, chroma_subsampling):
+        if extension == "png":
+            img_pil.save(file_path, pnginfo=png_metadata, compress_level=4)
+        else:
+            self._save_jpegli(img_pil, file_path, folder,
+                              quality, progressive, enable_xyb, chroma_subsampling)
+
     # ---------- main entry ----------
 
-    def save_images(self, image_1, filename_prefix="Wudd_Img", extension="png",
-                    quality=90, progressive=True, enable_xyb=False,
+    def save_images(self, image_1, filename_prefix="Wudd_Img", save_mode="append",
+                    extension="png", quality=90, progressive=True, enable_xyb=False,
                     chroma_subsampling="444", prompt=None, extra_pnginfo=None,
                     **kwargs):
-        # 传入真实尺寸，保证 %width%/%height% 这类占位符正确
         height, width = image_1.shape[1], image_1.shape[2]
-        # get_save_image_path 只用于解析文件夹/子目录/变量占位符，
-        # 它的 counter 只识别 _ 分隔符，不能用于我们的 . 格式。
+        # get_save_image_path 仅用于文件夹解析和 %width%/%year% 等占位符替换
         full_output_folder, filename, _, subfolder, filename_prefix = \
             folder_paths.get_save_image_path(filename_prefix, self.output_dir,
                                              width, height)
 
         ext = "jpg" if extension == "jpegli" else "png"
-        # 扫描已有文件，确定起始编号，避免覆盖旧文件
-        counter = self._find_next_counter(full_output_folder, filename, ext)
 
-        # 合并后按数字序排序，避免 image_10 排到 image_2 前面
+        # 合并所有图像输入，按数字序排列
         all_images = {"image_1": image_1, **kwargs}
         ordered_keys = sorted(
             (k for k, v in all_images.items()
@@ -175,37 +176,53 @@ class WuddMultiSaveImage:
             key=self._image_key_order,
         )
 
+        # 统计本次调用的图像总数，用于覆盖模式的命名判断
+        total_images = sum(len(all_images[k]) for k in ordered_keys)
+
         png_metadata = (self._build_pnginfo(prompt, extra_pnginfo)
                         if extension == "png" else None)
 
+        # 追加模式：确定本次批次编号（扫描已有文件取最大值 +1）
+        if save_mode == "append":
+            run = self._find_next_run(full_output_folder, filename, ext)
+
         results = []
+        seq = 0  # 本次调用内的图像序号（1-based）
+
         for key in ordered_keys:
             images = all_images[key]
             for image in images:
+                seq += 1
                 i_data = (255.0 * image.cpu().numpy()).clip(0, 255).astype(np.uint8)
                 img_pil = Image.fromarray(i_data)
 
-                file_name = f"{filename}.{counter:05}.{ext}"
-                file_path = os.path.join(full_output_folder, file_name)
-                # 双重保险：并发/外部写入也不会覆盖
-                while os.path.exists(file_path):
-                    counter += 1
-                    file_name = f"{filename}.{counter:05}.{ext}"
-                    file_path = os.path.join(full_output_folder, file_name)
+                if save_mode == "overwrite":
+                    # 覆盖模式：文件名固定，每次运行都写同一批文件
+                    # 单图：{前缀}.{ext}；多图：{前缀}.{序号:02}.{ext}
+                    if total_images == 1:
+                        file_name = f"{filename}.{ext}"
+                    else:
+                        file_name = f"{filename}.{seq:02}.{ext}"
 
-                if extension == "png":
-                    img_pil.save(file_path, pnginfo=png_metadata, compress_level=4)
                 else:
-                    self._save_jpegli(img_pil, file_path, full_output_folder,
-                                      quality, progressive, enable_xyb,
-                                      chroma_subsampling)
+                    # 追加模式：{前缀}.{批次:05}.{序号:02}.{ext}
+                    file_name = f"{filename}.{run:05}.{seq:02}.{ext}"
+                    # 双重保险：若文件意外存在则跳到下一批次
+                    file_path = os.path.join(full_output_folder, file_name)
+                    if os.path.exists(file_path):
+                        run += 1
+                        file_name = f"{filename}.{run:05}.{seq:02}.{ext}"
+
+                file_path = os.path.join(full_output_folder, file_name)
+                self._do_save(img_pil, file_path, extension, png_metadata,
+                              full_output_folder, quality, progressive,
+                              enable_xyb, chroma_subsampling)
 
                 results.append({
                     "filename": file_name,
                     "subfolder": subfolder,
                     "type": self.type,
                 })
-                counter += 1
 
         return {"ui": {"images": results}}
 
@@ -226,14 +243,9 @@ class WuddTextSplitter:
     CATEGORY = "Wudd Nodes"
 
     def split_text(self, text, index, skip_empty=False):
-        # splitlines 自动处理 \n / \r\n，并剥掉行尾换行
         lines = text.splitlines()
-
         if skip_empty:
-            # 跳过 strip() 后为空的行
             lines = [line for line in lines if line.strip()]
-
         if 0 <= index < len(lines):
             return (lines[index],)
-
         return ("",)
