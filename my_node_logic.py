@@ -156,14 +156,12 @@ class WuddMultiSaveImage:
         results = []
         for key in ordered_keys:
             images = all_images[key]
-            seq_num = key.split("_", 1)[1]
-
-            for batch_num, image in enumerate(images):
+            for image in images:
                 i_data = (255.0 * image.cpu().numpy()).clip(0, 255).astype(np.uint8)
                 img_pil = Image.fromarray(i_data)
 
                 ext = "jpg" if extension == "jpegli" else "png"
-                file_name = f"{filename}_{counter:05}_seq{seq_num}_b{batch_num}.{ext}"
+                file_name = f"{filename}.{counter:05}.{ext}"
                 file_path = os.path.join(full_output_folder, file_name)
 
                 if extension == "png":
