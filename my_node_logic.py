@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import json
 import uuid
@@ -55,6 +56,24 @@ class WuddMultiSaveImage:
             return int(key.split("_", 1)[1])
         except (ValueError, IndexError):
             return 10 ** 9
+
+    @staticmethod
+    def _find_next_counter(folder, filename, ext):
+        """扫描 folder 中已存在的 {filename}.NNNNN.{ext} 文件，返回下一个可用编号。
+        get_save_image_path 只认 _ 分隔符，我们用 . 所以要自己扫。"""
+        pattern = re.compile(
+            rf"^{re.escape(filename)}\.(\d+)\.{re.escape(ext)}$",
+            re.IGNORECASE,
+        )
+        max_n = 0
+        try:
+            for entry in os.scandir(folder):
+                m = pattern.match(entry.name)
+                if m:
+                    max_n = max(max_n, int(m.group(1)))
+        except OSError:
+            pass
+        return max_n + 1
 
     @staticmethod
     def _build_pnginfo(prompt, extra_pnginfo):
@@ -138,9 +157,15 @@ class WuddMultiSaveImage:
                     **kwargs):
         # 传入真实尺寸，保证 %width%/%height% 这类占位符正确
         height, width = image_1.shape[1], image_1.shape[2]
-        full_output_folder, filename, counter, subfolder, filename_prefix = \
+        # get_save_image_path 只用于解析文件夹/子目录/变量占位符，
+        # 它的 counter 只识别 _ 分隔符，不能用于我们的 . 格式。
+        full_output_folder, filename, _, subfolder, filename_prefix = \
             folder_paths.get_save_image_path(filename_prefix, self.output_dir,
                                              width, height)
+
+        ext = "jpg" if extension == "jpegli" else "png"
+        # 扫描已有文件，确定起始编号，避免覆盖旧文件
+        counter = self._find_next_counter(full_output_folder, filename, ext)
 
         # 合并后按数字序排序，避免 image_10 排到 image_2 前面
         all_images = {"image_1": image_1, **kwargs}
@@ -160,9 +185,13 @@ class WuddMultiSaveImage:
                 i_data = (255.0 * image.cpu().numpy()).clip(0, 255).astype(np.uint8)
                 img_pil = Image.fromarray(i_data)
 
-                ext = "jpg" if extension == "jpegli" else "png"
                 file_name = f"{filename}.{counter:05}.{ext}"
                 file_path = os.path.join(full_output_folder, file_name)
+                # 双重保险：并发/外部写入也不会覆盖
+                while os.path.exists(file_path):
+                    counter += 1
+                    file_name = f"{filename}.{counter:05}.{ext}"
+                    file_path = os.path.join(full_output_folder, file_name)
 
                 if extension == "png":
                     img_pil.save(file_path, pnginfo=png_metadata, compress_level=4)
