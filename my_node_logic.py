@@ -348,6 +348,106 @@ class WuddDropAlpha:
         return (result,)
 
 
+class WuddEdgePad:
+    """
+    上下各扩充 pad_px 像素，用边缘平均色填充；
+    原图上下边沿做 smoothstep 倒角（渐变混入平均色）；
+    pad 与原图衔接处用余弦钟形权重 + 高斯模糊做平滑过渡。
+    用途：将多张独立生成的图无缝拼成竖向全景。
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "pad_px": ("INT", {
+                    "default": 100, "min": 10, "max": 500, "step": 1,
+                    "tooltip": "上下各扩充的像素数",
+                }),
+                "sample_pct": ("FLOAT", {
+                    "default": 6.0, "min": 1.0, "max": 30.0, "step": 0.5,
+                    "tooltip": "取平均色的边缘区域占图高百分比",
+                }),
+                "blend_pct": ("FLOAT", {
+                    "default": 3.0, "min": 0.5, "max": 20.0, "step": 0.5,
+                    "tooltip": "衔接处渐变区域占图高百分比（两侧各此值）",
+                }),
+                "blur_sigma": ("FLOAT", {
+                    "default": 14.0, "min": 1.0, "max": 80.0, "step": 0.5,
+                    "tooltip": "衔接处高斯模糊 sigma（越大过渡越柔和）",
+                }),
+                "chamfer_pct": ("FLOAT", {
+                    "default": 20.0, "min": 0.0, "max": 80.0, "step": 1.0,
+                    "tooltip": "原图上下边沿倒角深度占图高百分比（0=不倒角）",
+                }),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image",)
+    FUNCTION = "pad_edges"
+    CATEGORY = "Wudd Nodes"
+
+    def pad_edges(self, image, pad_px, sample_pct, blend_pct, blur_sigma, chamfer_pct):
+        import torch
+        import numpy as np
+        from scipy.ndimage import gaussian_filter
+
+        results = []
+        for img in image:
+            arr = img.cpu().numpy().copy().astype(np.float32)  # [H, W, C]
+            H, W, C = arr.shape
+
+            # 1. 取顶/底部平均色
+            sr = max(1, int(H * sample_pct / 100.0))
+            top_c = arr[:sr].mean(axis=(0, 1))      # [C]
+            bot_c = arr[H - sr:].mean(axis=(0, 1))  # [C]
+
+            # 2. 原图上下边沿倒角：smoothstep 渐变混入平均色
+            ch = max(0, int(H * chamfer_pct / 100.0))
+            if ch > 0:
+                # 顶部：row 0 = 纯 top_c，row ch-1 ≈ 原图
+                t = np.linspace(0.0, 1.0, ch, dtype=np.float32).reshape(ch, 1, 1)
+                a = t * t * (3.0 - 2.0 * t)          # smoothstep [ch,1,1]
+                arr[:ch] = arr[:ch] * a + top_c * (1.0 - a)
+                # 底部：row H-ch ≈ 原图，row H-1 = 纯 bot_c
+                t = np.linspace(1.0, 0.0, ch, dtype=np.float32).reshape(ch, 1, 1)
+                a = t * t * (3.0 - 2.0 * t)
+                arr[H - ch:] = arr[H - ch:] * a + bot_c * (1.0 - a)
+
+            # 3. 创建扩展画布 [top_pad | chamfered_image | bot_pad]
+            top_pad = np.broadcast_to(top_c, (pad_px, W, C)).copy()
+            bot_pad = np.broadcast_to(bot_c, (pad_px, W, C)).copy()
+            canvas = np.concatenate([top_pad, arr, bot_pad], axis=0)  # [TH, W, C]
+            TH = canvas.shape[0]
+
+            # 4. 衔接处高斯模糊混合（余弦钟形权重，仅作用于衔接带）
+            br = max(2, int(H * blend_pct / 100.0))
+            # 垂直方向重一些，水平方向轻一些，保留横向细节
+            canvas_blur = gaussian_filter(
+                canvas.astype(np.float64),
+                sigma=[blur_sigma, blur_sigma * 0.4, 0],
+            ).astype(np.float32)
+
+            weight = np.zeros(TH, dtype=np.float32)
+            for j in (pad_px, pad_px + H):
+                r0 = max(0, j - br)
+                r1 = min(TH, j + br)
+                idxs = np.arange(r0, r1, dtype=np.float32)
+                t = (idxs - j) / br                        # -1 ~ +1
+                w = 0.5 * (1.0 + np.cos(t * np.pi))       # 余弦钟：中心=1, 两端=0
+                weight[r0:r1] = np.maximum(weight[r0:r1], w)
+
+            weight = weight.reshape(TH, 1, 1)
+            canvas = canvas * (1.0 - weight) + canvas_blur * weight
+            canvas = np.clip(canvas, 0.0, 1.0)
+
+            results.append(torch.from_numpy(canvas))
+
+        return (torch.stack(results),)
+
+
 class WuddTextSplitter:
     @classmethod
     def INPUT_TYPES(s):
