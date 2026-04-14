@@ -289,8 +289,8 @@ class WuddDropAlpha:
         if mask is None:
             return (image,)
 
-        # mask 全为不透明 → 直通
-        if mask.min().item() >= 1.0 - 1e-5:
+        # mask 全为 0（全不透明）→ 直通
+        if mask.max().item() <= 1e-5:
             return (image,)
 
         # mask: [B, H, W] → [B, H, W, 1] 以便广播
@@ -307,8 +307,9 @@ class WuddDropAlpha:
             bg = torch.tensor([r, g, b], dtype=image.dtype,
                               device=image.device).view(1, 1, 1, 3).expand(B, H, W, -1)
 
-        # alpha 合成：result = image * alpha + bg * (1 - alpha)
-        result = (image * alpha + bg * (1.0 - alpha)).clamp(0.0, 1.0)
+        # mask 在 ComfyUI 中 1=遮罩区域(透明)，0=保留区域(不透明)
+        # result = image * (1 - mask) + bg * mask
+        result = (image * (1.0 - alpha) + bg * alpha).clamp(0.0, 1.0)
         return (result,)
 
 
