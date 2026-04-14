@@ -230,6 +230,85 @@ class WuddMultiSaveImage:
         return {"ui": {"images": results}}
 
 
+class WuddDropAlpha:
+    """
+    丢掉 alpha 通道，透明区域用棋盘格或纯色填充。
+    若图像无 alpha 通道，或 alpha 全为不透明，则直通。
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "mode": (["checkerboard", "fill_color"],),
+                "fill_color": ("STRING", {"default": "#808080"}),
+                "tile_size": ("INT", {"default": 16, "min": 4, "max": 128, "step": 4}),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image",)
+    FUNCTION = "drop_alpha"
+    CATEGORY = "Wudd Nodes"
+
+    @staticmethod
+    def _parse_hex_color(hex_str: str):
+        """'#RRGGBB' → (r, g, b) float 0-1，解析失败返回中灰。"""
+        s = hex_str.strip().lstrip("#")
+        if len(s) == 3:
+            s = s[0]*2 + s[1]*2 + s[2]*2
+        if len(s) != 6:
+            return (0.5, 0.5, 0.5)
+        try:
+            return (int(s[0:2], 16) / 255.0,
+                    int(s[2:4], 16) / 255.0,
+                    int(s[4:6], 16) / 255.0)
+        except ValueError:
+            return (0.5, 0.5, 0.5)
+
+    @staticmethod
+    def _make_checkerboard(H, W, tile_size):
+        """生成棋盘格背景 [H, W, 3] float32，浅灰/深灰交替。"""
+        c1 = np.array([0.80, 0.80, 0.80], dtype=np.float32)
+        c2 = np.array([0.55, 0.55, 0.55], dtype=np.float32)
+        rows = np.arange(H) // tile_size
+        cols = np.arange(W) // tile_size
+        pattern = (rows[:, None] + cols[None, :]) % 2  # [H, W]，0 或 1
+        return np.where(pattern[:, :, None] == 0, c1, c2)  # [H, W, 3]
+
+    def drop_alpha(self, image, mode, fill_color, tile_size):
+        import torch
+
+        C = image.shape[-1]
+
+        # 无 alpha 通道 → 直通
+        if C == 3:
+            return (image,)
+
+        rgb   = image[..., :3]   # [B, H, W, 3]
+        alpha = image[..., 3:]   # [B, H, W, 1]
+
+        # alpha 全为不透明 → 直通
+        if alpha.min().item() >= 1.0 - 1e-5:
+            return (rgb,)
+
+        B, H, W, _ = rgb.shape
+
+        if mode == "checkerboard":
+            board = self._make_checkerboard(H, W, tile_size)          # [H, W, 3]
+            bg = torch.from_numpy(board).to(image.device)             # [H, W, 3]
+            bg = bg.unsqueeze(0).expand(B, -1, -1, -1)               # [B, H, W, 3]
+        else:  # fill_color
+            r, g, b = self._parse_hex_color(fill_color)
+            bg = torch.tensor([r, g, b], dtype=image.dtype,
+                              device=image.device).view(1, 1, 1, 3).expand(B, H, W, -1)
+
+        # alpha 合成：result = rgb * alpha + bg * (1 - alpha)
+        result = (rgb * alpha + bg * (1.0 - alpha)).clamp(0.0, 1.0)
+        return (result,)
+
+
 class WuddTextSplitter:
     @classmethod
     def INPUT_TYPES(s):
