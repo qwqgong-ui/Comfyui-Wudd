@@ -15,6 +15,11 @@ A powerful and robust custom node suite for [ComfyUI](https://github.com/comfyan
 * **Index Selection**: Extract specific lines by their index (0-based).
 * **Robust & Safe**: Returns an empty string instead of an error if the index is out of bounds.
 
+### 📝 Wudd Multi Text Splitter
+* **Multi-Output Splitting**: Splits a multi-line text block into up to 16 individual string outputs.
+* **Dynamic Output Slots**: Adjust the `count` widget to show only the number of output slots you need; unused slots are hidden automatically.
+* **Skip Empty Lines**: Optionally filter out blank lines before splitting.
+
 ## 🚀 Installation
 
 1. Navigate to your ComfyUI `custom_nodes` directory:
@@ -42,6 +47,13 @@ A powerful and robust custom node suite for [ComfyUI](https://github.com/comfyan
 ### Wudd Text Splitter
 - **text**: Multi-line string input.
 - **index**: The line number to extract (starts at 0).
+- **skip_empty**: If enabled, blank lines are removed before indexing.
+
+### Wudd Multi Text Splitter
+- **text**: Multi-line string input.
+- **count**: Number of output slots to expose (1–16).
+- **skip_empty**: If enabled, blank lines are removed before splitting.
+- **line_0 … line_N**: Each output carries one line from the text. Outputs beyond the available lines return an empty string.
 
 ## ⚠️ Notes
 **OS Compatibility**: Jpegli compression relies on a bundled pre-compiled 64-bit Windows executable (`cjpegli.exe`). It will seamlessly fallback to standard PIL JPEG saving on non-Windows environments. PNG saving works universally.

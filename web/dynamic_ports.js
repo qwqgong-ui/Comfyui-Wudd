@@ -122,6 +122,22 @@ app.registerExtension({
         // WuddMultiTextSplitter — 动态输出端口
         // ==========================================
         if (nodeData.name === "WuddMultiTextSplitter") {
+
+            // 独立辅助函数，避免 this 绑定问题，onNodeCreated / onConfigure 均可调用
+            function applyOutputCount(node, count) {
+                while (node.outputs && node.outputs.length > count) {
+                    node.removeOutput(node.outputs.length - 1);
+                }
+                while (!node.outputs || node.outputs.length < count) {
+                    const idx = node.outputs ? node.outputs.length : 0;
+                    node.addOutput(`line_${idx}`, "STRING");
+                }
+                if (node.setSize && node.computeSize) {
+                    try { node.setSize(node.computeSize()); } catch (e) {}
+                }
+                if (node.setDirtyCanvas) node.setDirtyCanvas(true, true);
+            }
+
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 if (onNodeCreated) onNodeCreated.apply(this, arguments);
@@ -130,37 +146,33 @@ app.registerExtension({
                     const countWidget = this.widgets?.find(w => w.name === "count");
                     if (!countWidget) return;
 
-                    const updateOutputs = (count) => {
-                        // 移除多余的输出槽
-                        while (this.outputs && this.outputs.length > count) {
-                            this.removeOutput(this.outputs.length - 1);
-                        }
-                        // 补充不足的输出槽
-                        while (!this.outputs || this.outputs.length < count) {
-                            const idx = this.outputs ? this.outputs.length : 0;
-                            this.addOutput(`line_${idx}`, "STRING");
-                        }
-                        if (this.setSize && this.computeSize) {
-                            try {
-                                this.setSize(this.computeSize());
-                            } catch (e) {}
-                        }
-                        if (this.setDirtyCanvas) this.setDirtyCanvas(true, true);
-                    };
+                    const node = this;
 
                     // 监听 count widget 变化
                     const origCallback = countWidget.callback;
                     countWidget.callback = function () {
-                        updateOutputs(countWidget.value);
+                        applyOutputCount(node, countWidget.value);
                         if (origCallback) return origCallback.apply(this, arguments);
                     };
 
-                    // 节点创建后初始化输出槽数量
+                    // 新建节点时初始化输出槽数量
                     // 延迟执行以等待 ComfyUI 完成默认输出槽的注册
-                    setTimeout(() => updateOutputs(countWidget.value), 50);
+                    setTimeout(() => applyOutputCount(node, countWidget.value), 50);
                 } catch (e) {
                     console.error("Wudd MultiTextSplitter Error:", e);
                 }
+            };
+
+            // 加载旧工作流时，onConfigure 在 widget 值恢复后同步调用，
+            // 此时 countWidget.value 已是保存的值，直接对齐输出槽数量，
+            // 消除 setTimeout 与配置恢复之间的竞态条件。
+            const onConfigure = nodeType.prototype.onConfigure;
+            nodeType.prototype.onConfigure = function (config) {
+                if (onConfigure) onConfigure.apply(this, arguments);
+                try {
+                    const countWidget = this.widgets?.find(w => w.name === "count");
+                    if (countWidget) applyOutputCount(this, countWidget.value);
+                } catch (e) {}
             };
         }
     }
