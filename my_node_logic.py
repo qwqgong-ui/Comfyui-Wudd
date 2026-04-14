@@ -232,8 +232,9 @@ class WuddMultiSaveImage:
 
 class WuddDropAlpha:
     """
-    丢掉 alpha 通道，透明区域用棋盘格或纯色填充。
-    若图像无 alpha 通道，或 alpha 全为不透明，则直通。
+    用背景替换透明区域，丢掉 alpha 遮罩，输出不透明 RGB 图像。
+    mask 未连接或全为 1（全不透明）时直通。
+    背景可选棋盘格或纯色填充。
     """
 
     @classmethod
@@ -244,7 +245,11 @@ class WuddDropAlpha:
                 "mode": (["checkerboard", "fill_color"],),
                 "fill_color": ("STRING", {"default": "#808080"}),
                 "tile_size": ("INT", {"default": 16, "min": 4, "max": 128, "step": 4}),
-            }
+            },
+            "optional": {
+                # MASK 形状：[B, H, W]，值 1=不透明，0=透明
+                "mask": ("MASK",),
+            },
         }
 
     RETURN_TYPES = ("IMAGE",)
@@ -277,23 +282,21 @@ class WuddDropAlpha:
         pattern = (rows[:, None] + cols[None, :]) % 2  # [H, W]，0 或 1
         return np.where(pattern[:, :, None] == 0, c1, c2)  # [H, W, 3]
 
-    def drop_alpha(self, image, mode, fill_color, tile_size):
+    def drop_alpha(self, image, mode, fill_color, tile_size, mask=None):
         import torch
 
-        C = image.shape[-1]
-
-        # 无 alpha 通道 → 直通
-        if C == 3:
+        # mask 未连接 → 直通
+        if mask is None:
             return (image,)
 
-        rgb   = image[..., :3]   # [B, H, W, 3]
-        alpha = image[..., 3:]   # [B, H, W, 1]
+        # mask 全为不透明 → 直通
+        if mask.min().item() >= 1.0 - 1e-5:
+            return (image,)
 
-        # alpha 全为不透明 → 直通
-        if alpha.min().item() >= 1.0 - 1e-5:
-            return (rgb,)
+        # mask: [B, H, W] → [B, H, W, 1] 以便广播
+        alpha = mask.unsqueeze(-1).to(image.dtype).to(image.device)
 
-        B, H, W, _ = rgb.shape
+        B, H, W, _ = image.shape
 
         if mode == "checkerboard":
             board = self._make_checkerboard(H, W, tile_size)          # [H, W, 3]
@@ -304,8 +307,8 @@ class WuddDropAlpha:
             bg = torch.tensor([r, g, b], dtype=image.dtype,
                               device=image.device).view(1, 1, 1, 3).expand(B, H, W, -1)
 
-        # alpha 合成：result = rgb * alpha + bg * (1 - alpha)
-        result = (rgb * alpha + bg * (1.0 - alpha)).clamp(0.0, 1.0)
+        # alpha 合成：result = image * alpha + bg * (1 - alpha)
+        result = (image * alpha + bg * (1.0 - alpha)).clamp(0.0, 1.0)
         return (result,)
 
 
