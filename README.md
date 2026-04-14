@@ -20,6 +20,12 @@ A powerful and robust custom node suite for [ComfyUI](https://github.com/comfyan
 * **Dynamic Output Slots**: Adjust the `count` widget to show only the number of output slots you need; unused slots are hidden automatically.
 * **Skip Empty Lines**: Optionally filter out blank lines before splitting.
 
+### 🎨 Wudd Drop Alpha
+* **Alpha Removal**: Composites a transparent image against a background and outputs a clean RGB image with no alpha channel.
+* **Checkerboard Mode**: Fills transparent areas with a classic light/dark grey checkerboard pattern (Photoshop-style).
+* **Fill Color Mode**: Fills transparent areas with any solid color specified as a hex value (e.g. `#ffffff`).
+* **Pass-Through**: If no mask is connected, or the mask is fully opaque, the image is passed through unchanged.
+
 ## 🚀 Installation
 
 1. Navigate to your ComfyUI `custom_nodes` directory:
