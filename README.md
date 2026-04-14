@@ -61,5 +61,12 @@ A powerful and robust custom node suite for [ComfyUI](https://github.com/comfyan
 - **skip_empty**: If enabled, blank lines are removed before splitting.
 - **line_0 … line_N**: Each output carries one line from the text. Outputs beyond the available lines return an empty string.
 
+### Wudd Drop Alpha
+- **image**: RGB image input.
+- **mask** *(optional)*: Alpha mask where `1` = transparent and `0` = opaque. If not connected, the node passes through.
+- **mode**: `checkerboard` or `fill_color`.
+- **fill_color**: Hex color string for the background (e.g. `#ffffff`). Only used in `fill_color` mode.
+- **tile_size**: Size of each checkerboard tile in pixels. Only used in `checkerboard` mode.
+
 ## ⚠️ Notes
 **OS Compatibility**: Jpegli compression relies on a bundled pre-compiled 64-bit Windows executable (`cjpegli.exe`). It will seamlessly fallback to standard PIL JPEG saving on non-Windows environments. PNG saving works universally.
