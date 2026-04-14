@@ -233,8 +233,8 @@ class WuddMultiSaveImage:
 class WuddDropAlpha:
     """
     用背景替换透明区域，丢掉 alpha 遮罩，输出不透明 RGB 图像。
-    mask 未连接或全为 1（全不透明）时直通。
-    背景可选棋盘格或纯色填充。
+    mask 未连接或全为不透明时直通。
+    背景可选棋盘格或纯色填充，可选按内容区域自动裁剪。
     """
 
     @classmethod
@@ -245,9 +245,11 @@ class WuddDropAlpha:
                 "mode": (["checkerboard", "fill_color"],),
                 "fill_color": ("STRING", {"default": "#808080"}),
                 "tile_size": ("INT", {"default": 16, "min": 4, "max": 128, "step": 4}),
+                "auto_crop": ("BOOLEAN", {"default": False}),
+                "padding": ("INT", {"default": 0, "min": 0, "max": 2048}),
             },
             "optional": {
-                # MASK 形状：[B, H, W]，值 1=不透明，0=透明
+                # MASK 形状：[B, H, W]，值 1=透明，0=不透明
                 "mask": ("MASK",),
             },
         }
@@ -282,14 +284,41 @@ class WuddDropAlpha:
         pattern = (rows[:, None] + cols[None, :]) % 2  # [H, W]，0 或 1
         return np.where(pattern[:, :, None] == 0, c1, c2)  # [H, W, 3]
 
-    def drop_alpha(self, image, mode, fill_color, tile_size, mask=None):
+    @staticmethod
+    def _crop_bounds(mask_np, padding, H, W):
+        """
+        mask_np: [B, H, W]，0=不透明内容区域
+        返回跨 batch 取并集后加 padding 的裁剪范围 (y1, y2, x1, x2)。
+        全透明时返回完整图像尺寸。
+        """
+        content = mask_np < 0.5               # [B, H, W] bool，True=有内容
+        union   = content.any(axis=0)         # [H, W]
+        row_any = union.any(axis=1)           # [H]
+        col_any = union.any(axis=0)           # [W]
+
+        if not row_any.any():
+            return 0, H, 0, W
+
+        y1 = int(np.argmax(row_any))
+        y2 = int(H - np.argmax(row_any[::-1]))
+        x1 = int(np.argmax(col_any))
+        x2 = int(W - np.argmax(col_any[::-1]))
+
+        y1 = max(0, y1 - padding)
+        y2 = min(H, y2 + padding)
+        x1 = max(0, x1 - padding)
+        x2 = min(W, x2 + padding)
+        return y1, y2, x1, x2
+
+    def drop_alpha(self, image, mode, fill_color, tile_size,
+                   auto_crop=False, padding=0, mask=None):
         import torch
 
         # mask 未连接 → 直通
         if mask is None:
             return (image,)
 
-        # mask 全为 0（全不透明）→ 直通
+        # mask 全为不透明 → 直通
         if mask.max().item() <= 1e-5:
             return (image,)
 
@@ -299,17 +328,23 @@ class WuddDropAlpha:
         B, H, W, _ = image.shape
 
         if mode == "checkerboard":
-            board = self._make_checkerboard(H, W, tile_size)          # [H, W, 3]
-            bg = torch.from_numpy(board).to(image.device)             # [H, W, 3]
+            board = self._make_checkerboard(H, W, tile_size)
+            bg = torch.from_numpy(board).to(image.device)
             bg = bg.unsqueeze(0).expand(B, -1, -1, -1)               # [B, H, W, 3]
         else:  # fill_color
             r, g, b = self._parse_hex_color(fill_color)
             bg = torch.tensor([r, g, b], dtype=image.dtype,
                               device=image.device).view(1, 1, 1, 3).expand(B, H, W, -1)
 
-        # mask 在 ComfyUI 中 1=遮罩区域(透明)，0=保留区域(不透明)
-        # result = image * (1 - mask) + bg * mask
+        # mask 在 ComfyUI 中 1=透明，0=不透明
         result = (image * (1.0 - alpha) + bg * alpha).clamp(0.0, 1.0)
+
+        if auto_crop:
+            y1, y2, x1, x2 = self._crop_bounds(
+                mask.cpu().numpy(), padding, H, W
+            )
+            result = result[:, y1:y2, x1:x2, :]
+
         return (result,)
 
 
