@@ -175,5 +175,102 @@ app.registerExtension({
                 } catch (e) {}
             };
         }
+
+        // ==========================================
+        // WuddImageListImporter — 动态输入与输出
+        // ==========================================
+        if (nodeData.name === "WuddImageListImporter") {
+            function applyImageCount(node, count) {
+                // 1. Show/hide upload widgets and their corresponding buttons
+                if (node.widgets) {
+                    for (let i = 0; i < node.widgets.length; i++) {
+                        const w = node.widgets[i];
+                        if (w.name && w.name.startsWith("image_")) {
+                            const match = w.name.match(/^image_(\d+)$/);
+                            if (match) {
+                                const idx = parseInt(match[1]);
+                                const shouldHide = idx > count;
+                                
+                                // Hide/show combo widget
+                                if (shouldHide) {
+                                    if (w.type !== "hidden") {
+                                        w.origType = w.type;
+                                        w.origComputeSize = w.computeSize;
+                                        w.type = "hidden";
+                                        w.computeSize = () => [0, -4];
+                                    }
+                                } else {
+                                    if (w.type === "hidden" && w.origType) {
+                                        w.type = w.origType;
+                                        w.computeSize = w.origComputeSize;
+                                    }
+                                }
+
+                                // ComfyUI injects the upload button immediately after the combo widget
+                                const nextW = node.widgets[i + 1];
+                                if (nextW && nextW.type === "button") {
+                                    if (shouldHide) {
+                                        if (nextW.type !== "hidden") {
+                                            nextW.origType = nextW.type;
+                                            nextW.origComputeSize = nextW.computeSize;
+                                            nextW.type = "hidden";
+                                            nextW.computeSize = () => [0, -4];
+                                        }
+                                    } else {
+                                        if (nextW.type === "hidden" && nextW.origType) {
+                                            nextW.type = nextW.origType;
+                                            nextW.computeSize = nextW.origComputeSize;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // 2. Add/remove output ports
+                while (node.outputs && node.outputs.length > count) {
+                    node.removeOutput(node.outputs.length - 1);
+                }
+                while (!node.outputs || node.outputs.length < count) {
+                    const idx = node.outputs ? node.outputs.length + 1 : 1;
+                    node.addOutput(`image_${idx}`, "IMAGE");
+                }
+                
+                if (node.setSize && node.computeSize) {
+                    try { node.setSize(node.computeSize()); } catch (e) {}
+                }
+                if (node.setDirtyCanvas) node.setDirtyCanvas(true, true);
+            }
+
+            const onNodeCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                if (onNodeCreated) onNodeCreated.apply(this, arguments);
+                try {
+                    const countWidget = this.widgets?.find(w => w.name === "image_count");
+                    if (!countWidget) return;
+                    const node = this;
+                    
+                    const origCallback = countWidget.callback;
+                    countWidget.callback = function () {
+                        applyImageCount(node, countWidget.value);
+                        if (origCallback) return origCallback.apply(this, arguments);
+                    };
+                    
+                    setTimeout(() => applyImageCount(node, countWidget.value), 50);
+                } catch (e) {
+                    console.error("Wudd ImageListImporter Error:", e);
+                }
+            };
+
+            const onConfigure = nodeType.prototype.onConfigure;
+            nodeType.prototype.onConfigure = function (config) {
+                if (onConfigure) onConfigure.apply(this, arguments);
+                try {
+                    const countWidget = this.widgets?.find(w => w.name === "image_count");
+                    if (countWidget) applyImageCount(this, countWidget.value);
+                } catch (e) {}
+            };
+        }
     }
 });

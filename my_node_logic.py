@@ -350,102 +350,164 @@ class WuddDropAlpha:
 
 class WuddEdgePad:
     """
-    上下各扩充 pad_px 像素，用边缘平均色填充；
-    原图上下边沿做 smoothstep 倒角（渐变混入平均色）；
-    pad 与原图衔接处用余弦钟形权重 + 高斯模糊做平滑过渡。
-    用途：将多张独立生成的图无缝拼成竖向全景。
+    多图输入版竖向全景预处理节点。
+    核心思路：把相邻两图的真实边缘内容拼在一起做高斯模糊，
+    自然融合后分别作为两图的扩充 pad，彻底消除纯色色带。
+    原图上下边沿做 smoothstep 倒角，pad/图衔接处再做一次模糊。
     """
+
+    MAX_INPUTS = 16
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "image": ("IMAGE",),
-                "pad_px": ("INT", {
-                    "default": 100, "min": 10, "max": 500, "step": 1,
-                    "tooltip": "上下各扩充的像素数",
-                }),
-                "sample_pct": ("FLOAT", {
-                    "default": 6.0, "min": 1.0, "max": 30.0, "step": 0.5,
-                    "tooltip": "取平均色的边缘区域占图高百分比",
-                }),
-                "blend_pct": ("FLOAT", {
-                    "default": 3.0, "min": 0.5, "max": 20.0, "step": 0.5,
-                    "tooltip": "衔接处渐变区域占图高百分比（两侧各此值）",
-                }),
-                "blur_sigma": ("FLOAT", {
-                    "default": 14.0, "min": 1.0, "max": 80.0, "step": 0.5,
-                    "tooltip": "衔接处高斯模糊 sigma（越大过渡越柔和）",
-                }),
-                "chamfer_pct": ("FLOAT", {
-                    "default": 20.0, "min": 0.0, "max": 80.0, "step": 1.0,
-                    "tooltip": "原图上下边沿倒角深度占图高百分比（0=不倒角）",
-                }),
-            }
+        required = {
+            "image_1":    ("IMAGE",),
+            "pad_px":     ("INT",   {"default": 100,  "min": 10,  "max": 500,  "step": 1}),
+            "blend_pct":  ("FLOAT", {"default": 3.0,  "min": 0.5, "max": 20.0, "step": 0.5,
+                                     "tooltip": "pad/图衔接带占图高百分比（两侧各此值）"}),
+            "pad_sigma":  ("FLOAT", {"default": 30.0, "min": 1.0, "max": 200.0,"step": 1.0,
+                                     "tooltip": "跨图混合高斯模糊强度（越大色带越不明显）"}),
+            "blend_sigma":("FLOAT", {"default": 12.0, "min": 1.0, "max": 80.0, "step": 0.5,
+                                     "tooltip": "pad/图衔接带的额外模糊强度"}),
+            "chamfer_pct":("FLOAT", {"default": 20.0, "min": 0.0, "max": 80.0, "step": 1.0,
+                                     "tooltip": "原图上下边沿倒角深度（占图高百分比，0=关闭）"}),
         }
+        optional = {f"image_{i}": ("IMAGE",) for i in range(2, cls.MAX_INPUTS + 1)}
+        return {"required": required, "optional": optional}
 
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("image",)
-    FUNCTION = "pad_edges"
-    CATEGORY = "Wudd Nodes"
+    RETURN_TYPES  = ("IMAGE",) * MAX_INPUTS
+    RETURN_NAMES  = tuple(f"image_{i}" for i in range(1, MAX_INPUTS + 1))
+    FUNCTION      = "pad_edges"
+    CATEGORY      = "Wudd Nodes"
 
-    def pad_edges(self, image, pad_px, sample_pct, blend_pct, blur_sigma, chamfer_pct):
-        import torch
-        import numpy as np
+    # ------------------------------------------------------------------ helpers
+
+    @staticmethod
+    def _chamfer(arr, ch):
+        """
+        原图顶/底各 ch 行做 smoothstep 倒角，渐变混入该侧的平均色。
+        就地修改，返回所用平均色供后续使用。
+        """
+        if ch <= 0:
+            H = arr.shape[0]
+            sr = max(1, H // 16)
+            top_c = arr[:sr].mean(axis=(0, 1))
+            bot_c = arr[H - sr:].mean(axis=(0, 1))
+            return top_c, bot_c
+        H = arr.shape[0]
+        sr = max(1, ch)
+        top_c = arr[:sr].mean(axis=(0, 1)).astype(np.float32)
+        bot_c = arr[H - sr:].mean(axis=(0, 1)).astype(np.float32)
+        t = np.linspace(0.0, 1.0, ch, dtype=np.float32).reshape(ch, 1, 1)
+        a = t * t * (3.0 - 2.0 * t)
+        arr[:ch]     = arr[:ch]     * a + top_c * (1.0 - a)
+        arr[H - ch:] = arr[H - ch:] * a[::-1] + bot_c * (1.0 - a[::-1])
+        return top_c, bot_c
+
+    @staticmethod
+    def _cross_blend_pad(a_bot_rows, b_top_rows, pad_px, sigma):
+        """
+        把 a 的底部行与 b 的顶部行拼合后做高斯模糊，
+        返回 (a的底部扩充pad, b的顶部扩充pad)，shape均为 [pad_px, W, C]。
+        拼接边界两侧取自同一个模糊数组，颜色天然连续无跳变。
+        """
         from scipy.ndimage import gaussian_filter
+        combined = np.concatenate([a_bot_rows, b_top_rows], axis=0).astype(np.float64)
+        blurred  = gaussian_filter(combined, sigma=[sigma, sigma * 0.3, 0]).astype(np.float32)
+        return blurred[:pad_px], blurred[pad_px:]
 
-        results = []
-        for img in image:
-            arr = img.cpu().numpy().copy().astype(np.float32)  # [H, W, C]
+    @staticmethod
+    def _edge_pad(edge_rows, pad_px, sigma, outward=True):
+        """
+        首/末图的外侧 pad：将边缘内容镜像后模糊，给出自然过渡。
+        outward=True 表示向外延伸（top 方向用镜像；bot 方向用镜像）。
+        """
+        from scipy.ndimage import gaussian_filter
+        mirrored = edge_rows[::-1].copy()            # 镜像边缘内容
+        blurred  = gaussian_filter(
+            mirrored.astype(np.float64), sigma=[sigma, sigma * 0.3, 0]
+        ).astype(np.float32)
+        return blurred[:pad_px]
+
+    @staticmethod
+    def _blend_junctions(canvas, pad_px, H, br, sigma):
+        """在 pad/图两个衔接点做余弦钟形权重 × 高斯模糊（就地）。"""
+        from scipy.ndimage import gaussian_filter
+        TH = canvas.shape[0]
+        blurred = gaussian_filter(
+            canvas.astype(np.float64), sigma=[sigma, sigma * 0.3, 0]
+        ).astype(np.float32)
+        weight = np.zeros(TH, dtype=np.float32)
+        for j in (pad_px, pad_px + H):
+            r0 = max(0, j - br)
+            r1 = min(TH, j + br)
+            idxs = np.arange(r0, r1, dtype=np.float32)
+            t    = (idxs - j) / br
+            w    = 0.5 * (1.0 + np.cos(t * np.pi))
+            weight[r0:r1] = np.maximum(weight[r0:r1], w)
+        weight = weight.reshape(TH, 1, 1)
+        return canvas * (1.0 - weight) + blurred * weight
+
+    # ------------------------------------------------------------------ main
+
+    def pad_edges(self, image_1, pad_px, blend_pct, pad_sigma,
+                  blend_sigma, chamfer_pct, **kwargs):
+        import torch
+
+        all_inputs  = {"image_1": image_1, **kwargs}
+        ordered_keys = sorted(
+            (k for k in all_inputs if k.startswith("image_") and all_inputs[k] is not None),
+            key=lambda k: int(k.split("_", 1)[1]),
+        )
+        arrs = [all_inputs[k][0].cpu().numpy().copy().astype(np.float32)
+                for k in ordered_keys]
+        N = len(arrs)
+
+        # ── 第一步：预先计算每张图的 top_pad / bot_pad ──────────────────────
+        top_pads = [None] * N
+        bot_pads = [None] * N
+
+        for i in range(N):
+            H, W, C = arrs[i].shape
+            grab = min(pad_px, H)           # 取多少行参与混合
+
+            if i == 0:
+                # 第一张顶部：镜像自身顶部内容向外模糊
+                top_pads[0] = self._edge_pad(arrs[0][:grab], pad_px, pad_sigma)
+            if i == N - 1:
+                # 最后一张底部：镜像自身底部内容向外模糊
+                bot_pads[N - 1] = self._edge_pad(arrs[N-1][-grab:], pad_px, pad_sigma)
+
+            if i < N - 1:
+                # 相邻两图的跨图混合 pad
+                grab_i  = min(pad_px, arrs[i].shape[0])
+                grab_i1 = min(pad_px, arrs[i + 1].shape[0])
+                a_bot = arrs[i    ][-grab_i :]
+                b_top = arrs[i + 1][: grab_i1]
+                bot_pads[i], top_pads[i + 1] = self._cross_blend_pad(
+                    a_bot, b_top, pad_px, pad_sigma
+                )
+
+        # ── 第二步：对每张图做倒角 + 拼接 + 衔接模糊 ────────────────────────
+        results_np = []
+        for i, arr in enumerate(arrs):
             H, W, C = arr.shape
-
-            # 1. 取顶/底部平均色
-            sr = max(1, int(H * sample_pct / 100.0))
-            top_c = arr[:sr].mean(axis=(0, 1))      # [C]
-            bot_c = arr[H - sr:].mean(axis=(0, 1))  # [C]
-
-            # 2. 原图上下边沿倒角：smoothstep 渐变混入平均色
             ch = max(0, int(H * chamfer_pct / 100.0))
-            if ch > 0:
-                # 顶部：row 0 = 纯 top_c，row ch-1 ≈ 原图
-                t = np.linspace(0.0, 1.0, ch, dtype=np.float32).reshape(ch, 1, 1)
-                a = t * t * (3.0 - 2.0 * t)          # smoothstep [ch,1,1]
-                arr[:ch] = arr[:ch] * a + top_c * (1.0 - a)
-                # 底部：row H-ch ≈ 原图，row H-1 = 纯 bot_c
-                t = np.linspace(1.0, 0.0, ch, dtype=np.float32).reshape(ch, 1, 1)
-                a = t * t * (3.0 - 2.0 * t)
-                arr[H - ch:] = arr[H - ch:] * a + bot_c * (1.0 - a)
+            br = max(2, int(H * blend_pct   / 100.0))
 
-            # 3. 创建扩展画布 [top_pad | chamfered_image | bot_pad]
-            top_pad = np.broadcast_to(top_c, (pad_px, W, C)).copy()
-            bot_pad = np.broadcast_to(bot_c, (pad_px, W, C)).copy()
-            canvas = np.concatenate([top_pad, arr, bot_pad], axis=0)  # [TH, W, C]
-            TH = canvas.shape[0]
+            self._chamfer(arr, ch)          # 倒角（就地）
 
-            # 4. 衔接处高斯模糊混合（余弦钟形权重，仅作用于衔接带）
-            br = max(2, int(H * blend_pct / 100.0))
-            # 垂直方向重一些，水平方向轻一些，保留横向细节
-            canvas_blur = gaussian_filter(
-                canvas.astype(np.float64),
-                sigma=[blur_sigma, blur_sigma * 0.4, 0],
-            ).astype(np.float32)
+            canvas = np.concatenate([top_pads[i], arr, bot_pads[i]], axis=0)
+            canvas = self._blend_junctions(canvas, pad_px, H, br, blend_sigma)
+            results_np.append(np.clip(canvas, 0.0, 1.0))
 
-            weight = np.zeros(TH, dtype=np.float32)
-            for j in (pad_px, pad_px + H):
-                r0 = max(0, j - br)
-                r1 = min(TH, j + br)
-                idxs = np.arange(r0, r1, dtype=np.float32)
-                t = (idxs - j) / br                        # -1 ~ +1
-                w = 0.5 * (1.0 + np.cos(t * np.pi))       # 余弦钟：中心=1, 两端=0
-                weight[r0:r1] = np.maximum(weight[r0:r1], w)
-
-            weight = weight.reshape(TH, 1, 1)
-            canvas = canvas * (1.0 - weight) + canvas_blur * weight
-            canvas = np.clip(canvas, 0.0, 1.0)
-
-            results.append(torch.from_numpy(canvas))
-
-        return (torch.stack(results),)
+        # ── 补齐输出槽 ────────────────────────────────────────────────────────
+        empty = np.zeros((1, 1, 3), dtype=np.float32)
+        out = []
+        for i in range(self.MAX_INPUTS):
+            arr = results_np[i] if i < N else empty
+            out.append(torch.from_numpy(arr).unsqueeze(0))
+        return tuple(out)
 
 
 class WuddTextSplitter:
@@ -497,3 +559,230 @@ class WuddMultiTextSplitter:
             lines = [line for line in lines if line.strip()]
         # 返回恰好 MAX_OUTPUTS 个值；超出 count 的槽只是空字符串，前端不连接即可
         return tuple(lines[i] if i < len(lines) else "" for i in range(self.MAX_OUTPUTS))
+
+class WuddImageListImporter:
+    MAX_IMAGES = 50
+
+    @classmethod
+    def INPUT_TYPES(s):
+        input_dir = folder_paths.get_input_directory()
+        files = [f for f in os.listdir(input_dir) if os.path.isfile(os.path.join(input_dir, f))]
+
+        # We need a fallback if no files exist
+        if len(files) == 0:
+            files = ["none"]
+
+        inputs = {
+            "required": {
+                "image_count": ("INT", {"default": 1, "min": 1, "max": s.MAX_IMAGES, "step": 1}),
+            },
+            "optional": {}
+        }
+        for i in range(1, s.MAX_IMAGES + 1):
+            inputs["required"][f"image_{i}"] = (files, {"image_upload": True})
+
+        return inputs
+
+    RETURN_TYPES = tuple(["IMAGE"] * MAX_IMAGES)
+    RETURN_NAMES = tuple([f"image_{i}" for i in range(1, MAX_IMAGES + 1)])
+    FUNCTION = "import_images"
+    CATEGORY = "Wudd Nodes"
+
+    def import_images(self, image_count, **kwargs):
+        import torch
+        from PIL import ImageOps
+        images = []
+        for i in range(1, self.MAX_IMAGES + 1):
+            if i > image_count:
+                images.append(None)
+                continue
+
+            image_name = kwargs.get(f"image_{i}")
+            if image_name and image_name != "none":
+                image_path = folder_paths.get_annotated_filepath(image_name)
+                if os.path.exists(image_path):
+                    try:
+                        i_img = Image.open(image_path)
+                        i_img = ImageOps.exif_transpose(i_img)
+                        image = i_img.convert("RGB")
+                        image = np.array(image).astype(np.float32) / 255.0
+                        image = torch.from_numpy(image)[None,]
+                        images.append(image)
+                    except Exception as e:
+                        print(f"[WuddImageListImporter] Error loading image {image_name}: {e}")
+                        # Fallback empty image
+                        images.append(torch.zeros((1, 64, 64, 3)))
+                else:
+                    images.append(torch.zeros((1, 64, 64, 3)))
+            else:
+                images.append(torch.zeros((1, 64, 64, 3)))
+
+        return tuple(images)
+
+
+class WuddImageStitch:
+    """
+    向四个方向拼接图像的节点。
+    接收中心图像（图一）和四个方向的图像，支持保持图一的比例和自动缩放。
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image_center": ("IMAGE",),
+                "keep_ratio": ("BOOLEAN", {"default": True}),
+                "gap": ("INT", {"default": 0, "min": 0, "max": 100}),
+            },
+            "optional": {
+                "image_top": ("IMAGE",),
+                "image_bottom": ("IMAGE",),
+                "image_left": ("IMAGE",),
+                "image_right": ("IMAGE",),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image",)
+    FUNCTION = "stitch_images"
+    CATEGORY = "Wudd Nodes"
+
+    @staticmethod
+    def _resize_image(image_tensor, target_height, target_width, keep_ratio=False):
+        """
+        调整图像大小。
+        image_tensor: [B, H, W, C] 张量
+        如果 keep_ratio=True，则在保持宽高比的前提下缩放，用背景填充
+        如果 keep_ratio=False，则直接拉伸
+        """
+        import torch
+
+        B, H, W, C = image_tensor.shape
+
+        if keep_ratio:
+            # 计算缩放比例
+            scale = min(target_height / H, target_width / W)
+            new_h = int(H * scale)
+            new_w = int(W * scale)
+
+            # 使用 PIL 缩放
+            img_pil = Image.fromarray(
+                (255.0 * image_tensor[0].cpu().numpy()).clip(0, 255).astype(np.uint8)
+            )
+            img_pil = img_pil.resize((new_w, new_h), Image.LANCZOS)
+            resized = np.array(img_pil).astype(np.float32) / 255.0
+
+            # 创建目标大小的背景（用中心颜色或黑色）
+            bg = np.zeros((target_height, target_width, C), dtype=np.float32)
+
+            # 居中放置缩放后的图像
+            y_offset = (target_height - new_h) // 2
+            x_offset = (target_width - new_w) // 2
+            bg[y_offset:y_offset + new_h, x_offset:x_offset + new_w] = resized
+
+            result = torch.from_numpy(bg).unsqueeze(0)
+        else:
+            # 直接拉伸缩放
+            img_pil = Image.fromarray(
+                (255.0 * image_tensor[0].cpu().numpy()).clip(0, 255).astype(np.uint8)
+            )
+            img_pil = img_pil.resize((target_width, target_height), Image.LANCZOS)
+            resized = np.array(img_pil).astype(np.float32) / 255.0
+            result = torch.from_numpy(resized).unsqueeze(0)
+
+        return result
+
+    def stitch_images(self, image_center, keep_ratio=True, gap=0,
+                     image_top=None, image_bottom=None,
+                     image_left=None, image_right=None):
+        import torch
+
+        # 获取中心图像的尺寸
+        B, center_h, center_w, C = image_center.shape
+
+        # 初始化四个方向的图像为 None
+        top = image_top
+        bottom = image_bottom
+        left = image_left
+        right = image_right
+
+        # 如果四个方向都没有图像，直接返回中心图像
+        if all(x is None for x in [top, bottom, left, right]):
+            return (image_center,)
+
+        # 处理上下方向的图像：宽度应该等于中心图像的宽度
+        if top is not None:
+            top = self._resize_image(top, top.shape[1], center_w, keep_ratio=not keep_ratio)
+
+        if bottom is not None:
+            bottom = self._resize_image(bottom, bottom.shape[1], center_w, keep_ratio=not keep_ratio)
+
+        # 处理左右方向的图像：高度应该等于中心图像的高度
+        if left is not None:
+            left = self._resize_image(left, center_h, left.shape[2], keep_ratio=not keep_ratio)
+
+        if right is not None:
+            right = self._resize_image(right, center_h, right.shape[2], keep_ratio=not keep_ratio)
+
+        # 构建最终图像
+        # 先拼接上下（如果有的话）
+        if top is not None and bottom is not None:
+            # 上、中、下三部分
+            if gap > 0:
+                gap_layer_v = torch.zeros((1, gap, center_w, C), device=image_center.device, dtype=image_center.dtype)
+                vertical = torch.cat([top, gap_layer_v, image_center, gap_layer_v, bottom], dim=1)
+            else:
+                vertical = torch.cat([top, image_center, bottom], dim=1)
+        elif top is not None:
+            # 只有上
+            if gap > 0:
+                gap_layer_v = torch.zeros((1, gap, center_w, C), device=image_center.device, dtype=image_center.dtype)
+                vertical = torch.cat([top, gap_layer_v, image_center], dim=1)
+            else:
+                vertical = torch.cat([top, image_center], dim=1)
+        elif bottom is not None:
+            # 只有下
+            if gap > 0:
+                gap_layer_v = torch.zeros((1, gap, center_w, C), device=image_center.device, dtype=image_center.dtype)
+                vertical = torch.cat([image_center, gap_layer_v, bottom], dim=1)
+            else:
+                vertical = torch.cat([image_center, bottom], dim=1)
+        else:
+            # 没有上下
+            vertical = image_center
+
+        # 拼接左右
+        if left is not None and right is not None:
+            # 获取垂直拼接后的高度
+            final_h = vertical.shape[1]
+            # 调整左右高度以匹配
+            left = self._resize_image(left, final_h, left.shape[2], keep_ratio=False)
+            right = self._resize_image(right, final_h, right.shape[2], keep_ratio=False)
+            if gap > 0:
+                gap_layer_h = torch.zeros((1, final_h, gap, C), device=image_center.device, dtype=image_center.dtype)
+                result = torch.cat([left, gap_layer_h, vertical, gap_layer_h, right], dim=2)
+            else:
+                result = torch.cat([left, vertical, right], dim=2)
+        elif left is not None:
+            # 只有左
+            final_h = vertical.shape[1]
+            left = self._resize_image(left, final_h, left.shape[2], keep_ratio=False)
+            if gap > 0:
+                gap_layer_h = torch.zeros((1, final_h, gap, C), device=image_center.device, dtype=image_center.dtype)
+                result = torch.cat([left, gap_layer_h, vertical], dim=2)
+            else:
+                result = torch.cat([left, vertical], dim=2)
+        elif right is not None:
+            # 只有右
+            final_h = vertical.shape[1]
+            right = self._resize_image(right, final_h, right.shape[2], keep_ratio=False)
+            if gap > 0:
+                gap_layer_h = torch.zeros((1, final_h, gap, C), device=image_center.device, dtype=image_center.dtype)
+                result = torch.cat([vertical, gap_layer_h, right], dim=2)
+            else:
+                result = torch.cat([vertical, right], dim=2)
+        else:
+            # 没有左右
+            result = vertical
+
+        return (result,)
