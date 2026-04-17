@@ -622,271 +622,118 @@ class WuddImageListImporter:
 
 class WuddImageStitch:
     """
-    多方向图像拼接节点。
-    中心图像 + 多个周围图像，每个周围图像可独立选择拼接方向（上下左右8个方向）。
-    支持保持宽高比和自动缩放。
+    线性图像拼接节点。
+    image_1 作为基准图，image_2~16 按顺序向同一方向拼接。
+    所有图自动适配第一张图在拼接轴上的尺寸（保持各自宽高比缩放）。
     """
 
-    MAX_SURROUNDING = 8
+    MAX_INPUTS = 16
 
     @classmethod
     def INPUT_TYPES(cls):
         required = {
-            "image_center": ("IMAGE",),
-            "keep_ratio": ("BOOLEAN", {"default": True}),
-            "gap": ("INT", {"default": 0, "min": 0, "max": 100}),
+            "image_1":   ("IMAGE",),
+            "direction": (["right", "down", "left", "up"], {"default": "right"}),
+            "gap":       ("INT", {"default": 0, "min": 0, "max": 256, "step": 1}),
         }
-        optional = {}
-        for i in range(1, cls.MAX_SURROUNDING + 1):
-            optional[f"image_{i}"] = ("IMAGE",)
-            optional[f"direction_{i}"] = (
-                ["top", "bottom", "left", "right",
-                 "top_left", "top_right", "bottom_left", "bottom_right"],
-                {"default": "top"}
-            )
+        optional = {
+            f"image_{i}": ("IMAGE",) for i in range(2, cls.MAX_INPUTS + 1)
+        }
         return {"required": required, "optional": optional}
 
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("image",)
-    FUNCTION = "stitch_images"
-    CATEGORY = "Wudd Nodes"
+    FUNCTION     = "stitch"
+    CATEGORY     = "Wudd Nodes"
+
+    # ── 工具函数 ──────────────────────────────────────────────────────
 
     @staticmethod
-    def _resize_to_width(image_tensor, target_width, keep_ratio=False):
-        """调整图像宽度到目标值。"""
-        import torch
-        B, H, W, C = image_tensor.shape
-        img_pil = Image.fromarray(
-            (255.0 * image_tensor[0].cpu().numpy()).clip(0, 255).astype(np.uint8)
+    def _t2pil(t):
+        """[1,H,W,C] float32 → PIL RGB"""
+        return Image.fromarray(
+            (t[0].cpu().numpy() * 255.0).clip(0, 255).astype(np.uint8)
         )
-        if keep_ratio:
-            scale = target_width / W
-            new_h = int(H * scale)
-            img_pil = img_pil.resize((target_width, new_h), Image.LANCZOS)
-        else:
-            img_pil = img_pil.resize((target_width, H), Image.LANCZOS)
-        resized = np.array(img_pil).astype(np.float32) / 255.0
-        return torch.from_numpy(resized).unsqueeze(0)
 
     @staticmethod
-    def _resize_to_height(image_tensor, target_height, keep_ratio=False):
-        """调整图像高度到目标值。"""
+    def _pil2t(pil):
+        """PIL RGB → [1,H,W,C] float32"""
         import torch
-        B, H, W, C = image_tensor.shape
-        img_pil = Image.fromarray(
-            (255.0 * image_tensor[0].cpu().numpy()).clip(0, 255).astype(np.uint8)
-        )
-        if keep_ratio:
-            scale = target_height / H
-            new_w = int(W * scale)
-            img_pil = img_pil.resize((new_w, target_height), Image.LANCZOS)
-        else:
-            img_pil = img_pil.resize((W, target_height), Image.LANCZOS)
-        resized = np.array(img_pil).astype(np.float32) / 255.0
-        return torch.from_numpy(resized).unsqueeze(0)
+        return torch.from_numpy(
+            np.array(pil).astype(np.float32) / 255.0
+        ).unsqueeze(0)
 
-    @staticmethod
-    def _resize_to_size(image_tensor, target_height, target_width, keep_ratio=False):
-        """同时调整高和宽。"""
-        import torch
-        B, H, W, C = image_tensor.shape
-        img_pil = Image.fromarray(
-            (255.0 * image_tensor[0].cpu().numpy()).clip(0, 255).astype(np.uint8)
-        )
-        if keep_ratio:
-            scale = min(target_height / H, target_width / W)
-            new_h = int(H * scale)
-            new_w = int(W * scale)
-            img_pil = img_pil.resize((new_w, new_h), Image.LANCZOS)
-            # 用黑色背景填充到目标尺寸
-            bg = Image.new('RGB', (target_width, target_height), (0, 0, 0))
-            y_offset = (target_height - new_h) // 2
-            x_offset = (target_width - new_w) // 2
-            bg.paste(img_pil, (x_offset, y_offset))
-            resized = np.array(bg).astype(np.float32) / 255.0
-        else:
-            img_pil = img_pil.resize((target_width, target_height), Image.LANCZOS)
-            resized = np.array(img_pil).astype(np.float32) / 255.0
-        return torch.from_numpy(resized).unsqueeze(0)
+    def _fit_height(self, img, target_h):
+        """缩放图像使高度=target_h，宽度等比例变化。"""
+        pil  = self._t2pil(img)
+        w, h = pil.size
+        new_w = max(1, round(w * target_h / h))
+        return self._pil2t(pil.resize((new_w, target_h), Image.LANCZOS))
 
-    def stitch_images(self, image_center, keep_ratio=True, gap=0, **kwargs):
+    def _fit_width(self, img, target_w):
+        """缩放图像使宽度=target_w，高度等比例变化。"""
+        pil  = self._t2pil(img)
+        w, h = pil.size
+        new_h = max(1, round(h * target_w / w))
+        return self._pil2t(pil.resize((target_w, new_h), Image.LANCZOS))
+
+    # ── 主逻辑 ────────────────────────────────────────────────────────
+
+    def stitch(self, image_1, direction, gap, **kwargs):
         import torch
 
-        B, center_h, center_w, C = image_center.shape
+        # 收集所有有效图像（按编号顺序）
+        images = [image_1]
+        for i in range(2, self.MAX_INPUTS + 1):
+            img = kwargs.get(f"image_{i}")
+            if img is not None:
+                images.append(img)
 
-        # 收集所有周围图像和方向
-        surround_images = []
-        for i in range(1, self.MAX_SURROUNDING + 1):
-            img_key = f"image_{i}"
-            dir_key = f"direction_{i}"
-            if img_key in kwargs and kwargs[img_key] is not None:
-                direction = kwargs.get(dir_key, "top")
-                surround_images.append((kwargs[img_key], direction))
+        if len(images) == 1:
+            return (image_1,)
 
-        # 如果没有周围图像，直接返回中心图像
-        if not surround_images:
-            return (image_center,)
+        _, ref_h, ref_w, C = image_1.shape
+        horizontal = direction in ("right", "left")
 
-        # 分类处理各方向图像
-        images_by_direction = {
-            "top": [], "bottom": [], "left": [], "right": [],
-            "top_left": [], "top_right": [], "bottom_left": [], "bottom_right": []
-        }
-        for img, direction in surround_images:
-            images_by_direction[direction].append(img)
+        # 适配所有图像到第一张的基准边长
+        scaled = []
+        for img in images:
+            if horizontal:
+                # 左右拼接 → 统一高度
+                scaled.append(self._fit_height(img, ref_h))
+            else:
+                # 上下拼接 → 统一宽度
+                scaled.append(self._fit_width(img, ref_w))
 
-        result = image_center
+        # left/up 方向：把 2~N 图倒序排在 image_1 前面
+        if direction in ("left", "up"):
+            tail = list(reversed(scaled[1:]))
+            ordered = tail + [scaled[0]]
+        else:  # right / down
+            ordered = scaled
 
-        # 1. 先处理四个边（上下左右）
-        if images_by_direction["top"] or images_by_direction["bottom"]:
-            result = self._stitch_vertical(
-                result,
-                images_by_direction["top"],
-                images_by_direction["bottom"],
-                keep_ratio, gap, C
-            )
-
-        if images_by_direction["left"] or images_by_direction["right"]:
-            result = self._stitch_horizontal(
-                result,
-                images_by_direction["left"],
-                images_by_direction["right"],
-                keep_ratio, gap, C
-            )
-
-        # 2. 处理四个角（可选）
-        if any([images_by_direction["top_left"], images_by_direction["top_right"],
-                images_by_direction["bottom_left"], images_by_direction["bottom_right"]]):
-            result = self._stitch_corners(
-                result,
-                images_by_direction["top_left"],
-                images_by_direction["top_right"],
-                images_by_direction["bottom_left"],
-                images_by_direction["bottom_right"],
-                keep_ratio, gap, C
-            )
+        # 拼接
+        result = ordered[0]
+        for nxt in ordered[1:]:
+            if horizontal:
+                if gap > 0:
+                    h_now = result.shape[1]
+                    bar = torch.zeros(
+                        (1, h_now, gap, C),
+                        device=result.device, dtype=result.dtype
+                    )
+                    result = torch.cat([result, bar, nxt], dim=2)
+                else:
+                    result = torch.cat([result, nxt], dim=2)
+            else:
+                if gap > 0:
+                    w_now = result.shape[2]
+                    bar = torch.zeros(
+                        (1, gap, w_now, C),
+                        device=result.device, dtype=result.dtype
+                    )
+                    result = torch.cat([result, bar, nxt], dim=1)
+                else:
+                    result = torch.cat([result, nxt], dim=1)
 
         return (result,)
-
-    def _stitch_vertical(self, center, top_list, bottom_list, keep_ratio, gap, C):
-        """上下拼接。"""
-        import torch
-        _, center_h, center_w, _ = center.shape
-
-        result = center
-        # 上方
-        for top_img in top_list:
-            top_img = self._resize_to_width(top_img, center_w, keep_ratio=keep_ratio)
-            if gap > 0:
-                gap_layer = torch.zeros((1, gap, center_w, C), device=center.device, dtype=center.dtype)
-                result = torch.cat([top_img, gap_layer, result], dim=1)
-            else:
-                result = torch.cat([top_img, result], dim=1)
-
-        # 下方
-        for bottom_img in bottom_list:
-            bottom_img = self._resize_to_width(bottom_img, center_w, keep_ratio=keep_ratio)
-            if gap > 0:
-                gap_layer = torch.zeros((1, gap, center_w, C), device=center.device, dtype=center.dtype)
-                result = torch.cat([result, gap_layer, bottom_img], dim=1)
-            else:
-                result = torch.cat([result, bottom_img], dim=1)
-
-        return result
-
-    def _stitch_horizontal(self, center, left_list, right_list, keep_ratio, gap, C):
-        """左右拼接。"""
-        import torch
-        _, center_h, center_w, _ = center.shape
-
-        result = center
-        # 左方
-        for left_img in left_list:
-            left_img = self._resize_to_height(left_img, center_h, keep_ratio=keep_ratio)
-            if gap > 0:
-                gap_layer = torch.zeros((1, center_h, gap, C), device=center.device, dtype=center.dtype)
-                result = torch.cat([left_img, gap_layer, result], dim=2)
-            else:
-                result = torch.cat([left_img, result], dim=2)
-
-        # 右方
-        for right_img in right_list:
-            right_img = self._resize_to_height(right_img, center_h, keep_ratio=keep_ratio)
-            if gap > 0:
-                gap_layer = torch.zeros((1, center_h, gap, C), device=center.device, dtype=center.dtype)
-                result = torch.cat([result, gap_layer, right_img], dim=2)
-            else:
-                result = torch.cat([result, right_img], dim=2)
-
-        return result
-
-    def _stitch_corners(self, center, tl_list, tr_list, bl_list, br_list, keep_ratio, gap, C):
-        """四个角拼接（简化版）。"""
-        import torch
-
-        # 注：四角拼接较为复杂，当前实现仅支持四角单独拼接（不与上下左右混合）
-        # 如果需要上下左右和四角同时拼接，建议分别使用
-        if not any([tl_list, tr_list, bl_list, br_list]):
-            return center
-
-        _, h, w, _ = center.shape
-        result = center
-
-        # 简化处理：按照中心图像尺寸拼接四角
-        # 如果连接了四角，则拼接成 3x3 网格
-        tl_img = self._resize_to_size(tl_list[0], h, w, keep_ratio=keep_ratio) if tl_list else None
-        tr_img = self._resize_to_size(tr_list[0], h, w, keep_ratio=keep_ratio) if tr_list else None
-        bl_img = self._resize_to_size(bl_list[0], h, w, keep_ratio=keep_ratio) if bl_list else None
-        br_img = self._resize_to_size(br_list[0], h, w, keep_ratio=keep_ratio) if br_list else None
-
-        if tl_img is not None or tr_img is not None:
-            # 构建顶行：左上 + 中心 + 右上
-            if tl_img is not None:
-                if gap > 0:
-                    gap_w = torch.zeros((1, h, gap, C), device=center.device, dtype=center.dtype)
-                    top_row = torch.cat([tl_img, gap_w], dim=2)
-                else:
-                    top_row = tl_img
-                if tr_img is not None:
-                    if gap > 0:
-                        gap_w = torch.zeros((1, h, gap, C), device=center.device, dtype=center.dtype)
-                        top_row = torch.cat([top_row, gap_w, result, gap_w, tr_img], dim=2)
-                    else:
-                        top_row = torch.cat([top_row, result, tr_img], dim=2)
-                else:
-                    top_row = torch.cat([top_row, result], dim=2)
-            else:
-                top_row = result if tr_img is None else torch.cat([result, tr_img], dim=2)
-
-            if gap > 0:
-                gap_h = torch.zeros((1, gap, top_row.shape[2], C), device=center.device, dtype=center.dtype)
-                result = torch.cat([top_row, gap_h], dim=1)
-            else:
-                result = top_row
-
-        if bl_img is not None or br_img is not None:
-            # 构建底行
-            if bl_img is not None:
-                if gap > 0:
-                    gap_w = torch.zeros((1, h, gap, C), device=center.device, dtype=center.dtype)
-                    bottom_row = torch.cat([bl_img, gap_w], dim=2)
-                else:
-                    bottom_row = bl_img
-                if br_img is not None:
-                    if gap > 0:
-                        gap_w = torch.zeros((1, h, gap, C), device=center.device, dtype=center.dtype)
-                        bottom_row = torch.cat([bottom_row, gap_w, result, gap_w, br_img], dim=2)
-                    else:
-                        bottom_row = torch.cat([bottom_row, result, br_img], dim=2)
-                else:
-                    bottom_row = torch.cat([bottom_row, result], dim=2)
-            else:
-                bottom_row = result if br_img is None else torch.cat([result, br_img], dim=2)
-
-            if gap > 0:
-                gap_h = torch.zeros((1, gap, result.shape[2], C), device=center.device, dtype=center.dtype)
-                result = torch.cat([result, gap_h, bottom_row], dim=1)
-            else:
-                result = torch.cat([result, bottom_row], dim=1)
-
-        return result
