@@ -648,49 +648,56 @@ class WuddImageStitch:
     CATEGORY = "Wudd Nodes"
 
     @staticmethod
-    def _resize_image(image_tensor, target_height, target_width, keep_ratio=False):
+    def _resize_to_width(image_tensor, target_width, keep_ratio=False):
         """
-        调整图像大小。
+        调整图像宽度到目标值。
         image_tensor: [B, H, W, C] 张量
-        如果 keep_ratio=True，则在保持宽高比的前提下缩放，用背景填充
-        如果 keep_ratio=False，则直接拉伸
+        如果 keep_ratio=True，高度按比例缩放；如果 False，直接拉伸
         """
         import torch
 
         B, H, W, C = image_tensor.shape
+        img_pil = Image.fromarray(
+            (255.0 * image_tensor[0].cpu().numpy()).clip(0, 255).astype(np.uint8)
+        )
 
         if keep_ratio:
-            # 计算缩放比例
-            scale = min(target_height / H, target_width / W)
+            # 按比例缩放
+            scale = target_width / W
             new_h = int(H * scale)
-            new_w = int(W * scale)
-
-            # 使用 PIL 缩放
-            img_pil = Image.fromarray(
-                (255.0 * image_tensor[0].cpu().numpy()).clip(0, 255).astype(np.uint8)
-            )
-            img_pil = img_pil.resize((new_w, new_h), Image.LANCZOS)
-            resized = np.array(img_pil).astype(np.float32) / 255.0
-
-            # 创建目标大小的背景（用中心颜色或黑色）
-            bg = np.zeros((target_height, target_width, C), dtype=np.float32)
-
-            # 居中放置缩放后的图像
-            y_offset = (target_height - new_h) // 2
-            x_offset = (target_width - new_w) // 2
-            bg[y_offset:y_offset + new_h, x_offset:x_offset + new_w] = resized
-
-            result = torch.from_numpy(bg).unsqueeze(0)
+            img_pil = img_pil.resize((target_width, new_h), Image.LANCZOS)
         else:
-            # 直接拉伸缩放
-            img_pil = Image.fromarray(
-                (255.0 * image_tensor[0].cpu().numpy()).clip(0, 255).astype(np.uint8)
-            )
-            img_pil = img_pil.resize((target_width, target_height), Image.LANCZOS)
-            resized = np.array(img_pil).astype(np.float32) / 255.0
-            result = torch.from_numpy(resized).unsqueeze(0)
+            # 直接拉伸宽度
+            img_pil = img_pil.resize((target_width, H), Image.LANCZOS)
 
-        return result
+        resized = np.array(img_pil).astype(np.float32) / 255.0
+        return torch.from_numpy(resized).unsqueeze(0)
+
+    @staticmethod
+    def _resize_to_height(image_tensor, target_height, keep_ratio=False):
+        """
+        调整图像高度到目标值。
+        image_tensor: [B, H, W, C] 张量
+        如果 keep_ratio=True，宽度按比例缩放；如果 False，直接拉伸
+        """
+        import torch
+
+        B, H, W, C = image_tensor.shape
+        img_pil = Image.fromarray(
+            (255.0 * image_tensor[0].cpu().numpy()).clip(0, 255).astype(np.uint8)
+        )
+
+        if keep_ratio:
+            # 按比例缩放
+            scale = target_height / H
+            new_w = int(W * scale)
+            img_pil = img_pil.resize((new_w, target_height), Image.LANCZOS)
+        else:
+            # 直接拉伸高度
+            img_pil = img_pil.resize((W, target_height), Image.LANCZOS)
+
+        resized = np.array(img_pil).astype(np.float32) / 255.0
+        return torch.from_numpy(resized).unsqueeze(0)
 
     def stitch_images(self, image_center, keep_ratio=True, gap=0,
                      image_top=None, image_bottom=None,
@@ -700,89 +707,69 @@ class WuddImageStitch:
         # 获取中心图像的尺寸
         B, center_h, center_w, C = image_center.shape
 
-        # 初始化四个方向的图像为 None
-        top = image_top
-        bottom = image_bottom
-        left = image_left
-        right = image_right
-
         # 如果四个方向都没有图像，直接返回中心图像
-        if all(x is None for x in [top, bottom, left, right]):
+        if all(x is None for x in [image_top, image_bottom, image_left, image_right]):
             return (image_center,)
 
-        # 处理上下方向的图像：宽度应该等于中心图像的宽度
+        # 处理上下方向的图像：缩放宽度到中心图像宽度
+        top = image_top
+        bottom = image_bottom
         if top is not None:
-            top = self._resize_image(top, top.shape[1], center_w, keep_ratio=not keep_ratio)
-
+            top = self._resize_to_width(top, center_w, keep_ratio=keep_ratio)
         if bottom is not None:
-            bottom = self._resize_image(bottom, bottom.shape[1], center_w, keep_ratio=not keep_ratio)
+            bottom = self._resize_to_width(bottom, center_w, keep_ratio=keep_ratio)
 
-        # 处理左右方向的图像：高度应该等于中心图像的高度
-        if left is not None:
-            left = self._resize_image(left, center_h, left.shape[2], keep_ratio=not keep_ratio)
-
-        if right is not None:
-            right = self._resize_image(right, center_h, right.shape[2], keep_ratio=not keep_ratio)
-
-        # 构建最终图像
-        # 先拼接上下（如果有的话）
+        # 拼接上下（垂直方向）
         if top is not None and bottom is not None:
-            # 上、中、下三部分
             if gap > 0:
-                gap_layer_v = torch.zeros((1, gap, center_w, C), device=image_center.device, dtype=image_center.dtype)
-                vertical = torch.cat([top, gap_layer_v, image_center, gap_layer_v, bottom], dim=1)
+                gap_layer = torch.zeros((1, gap, center_w, C), device=image_center.device, dtype=image_center.dtype)
+                vertical = torch.cat([top, gap_layer, image_center, gap_layer, bottom], dim=1)
             else:
                 vertical = torch.cat([top, image_center, bottom], dim=1)
         elif top is not None:
-            # 只有上
             if gap > 0:
-                gap_layer_v = torch.zeros((1, gap, center_w, C), device=image_center.device, dtype=image_center.dtype)
-                vertical = torch.cat([top, gap_layer_v, image_center], dim=1)
+                gap_layer = torch.zeros((1, gap, center_w, C), device=image_center.device, dtype=image_center.dtype)
+                vertical = torch.cat([top, gap_layer, image_center], dim=1)
             else:
                 vertical = torch.cat([top, image_center], dim=1)
         elif bottom is not None:
-            # 只有下
             if gap > 0:
-                gap_layer_v = torch.zeros((1, gap, center_w, C), device=image_center.device, dtype=image_center.dtype)
-                vertical = torch.cat([image_center, gap_layer_v, bottom], dim=1)
+                gap_layer = torch.zeros((1, gap, center_w, C), device=image_center.device, dtype=image_center.dtype)
+                vertical = torch.cat([image_center, gap_layer, bottom], dim=1)
             else:
                 vertical = torch.cat([image_center, bottom], dim=1)
         else:
-            # 没有上下
             vertical = image_center
 
-        # 拼接左右
+        # 处理左右方向的图像：缩放高度到垂直拼接后的高度
+        final_h = vertical.shape[1]
+        left = image_left
+        right = image_right
+        if left is not None:
+            left = self._resize_to_height(left, final_h, keep_ratio=keep_ratio)
+        if right is not None:
+            right = self._resize_to_height(right, final_h, keep_ratio=keep_ratio)
+
+        # 拼接左右（水平方向）
         if left is not None and right is not None:
-            # 获取垂直拼接后的高度
-            final_h = vertical.shape[1]
-            # 调整左右高度以匹配
-            left = self._resize_image(left, final_h, left.shape[2], keep_ratio=False)
-            right = self._resize_image(right, final_h, right.shape[2], keep_ratio=False)
             if gap > 0:
-                gap_layer_h = torch.zeros((1, final_h, gap, C), device=image_center.device, dtype=image_center.dtype)
-                result = torch.cat([left, gap_layer_h, vertical, gap_layer_h, right], dim=2)
+                gap_layer = torch.zeros((1, final_h, gap, C), device=image_center.device, dtype=image_center.dtype)
+                result = torch.cat([left, gap_layer, vertical, gap_layer, right], dim=2)
             else:
                 result = torch.cat([left, vertical, right], dim=2)
         elif left is not None:
-            # 只有左
-            final_h = vertical.shape[1]
-            left = self._resize_image(left, final_h, left.shape[2], keep_ratio=False)
             if gap > 0:
-                gap_layer_h = torch.zeros((1, final_h, gap, C), device=image_center.device, dtype=image_center.dtype)
-                result = torch.cat([left, gap_layer_h, vertical], dim=2)
+                gap_layer = torch.zeros((1, final_h, gap, C), device=image_center.device, dtype=image_center.dtype)
+                result = torch.cat([left, gap_layer, vertical], dim=2)
             else:
                 result = torch.cat([left, vertical], dim=2)
         elif right is not None:
-            # 只有右
-            final_h = vertical.shape[1]
-            right = self._resize_image(right, final_h, right.shape[2], keep_ratio=False)
             if gap > 0:
-                gap_layer_h = torch.zeros((1, final_h, gap, C), device=image_center.device, dtype=image_center.dtype)
-                result = torch.cat([vertical, gap_layer_h, right], dim=2)
+                gap_layer = torch.zeros((1, final_h, gap, C), device=image_center.device, dtype=image_center.dtype)
+                result = torch.cat([vertical, gap_layer, right], dim=2)
             else:
                 result = torch.cat([vertical, right], dim=2)
         else:
-            # 没有左右
             result = vertical
 
         return (result,)
