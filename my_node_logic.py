@@ -620,6 +620,102 @@ class WuddImageListImporter:
         return tuple(images)
 
 
+class WuddGptImage2:
+    """
+    调用 OpenAI GPT-Image-2 API 生成图像。
+    API Key 优先从节点参数读取，为空时自动读取环境变量 OPENAI_API_KEY。
+    注意：gpt-image-2 不支持透明背景。
+    """
+
+    SIZES = ["auto", "1024x1024", "1536x1024", "1024x1536",
+             "2048x2048", "2048x1152", "3840x2160", "2160x3840"]
+    QUALITIES = ["auto", "low", "medium", "high"]
+    OUTPUT_FORMATS = ["png", "webp", "jpeg"]
+    MODERATIONS = ["auto", "low"]
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "prompt": ("STRING", {"multiline": True, "default": ""}),
+                "api_key": ("STRING", {"default": ""}),
+                "size": (cls.SIZES,),
+                "quality": (cls.QUALITIES,),
+                "output_format": (cls.OUTPUT_FORMATS,),
+                "output_compression": ("INT", {
+                    "default": 100, "min": 0, "max": 100,
+                    "tooltip": "压缩率，仅对 jpeg/webp 有效；100=最高质量",
+                }),
+                "moderation": (cls.MODERATIONS,),
+                "n": ("INT", {"default": 1, "min": 1, "max": 10}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("image", "revised_prompt")
+    FUNCTION = "generate"
+    CATEGORY = "Wudd Nodes"
+
+    def generate(self, prompt, api_key, size, quality,
+                 output_format, output_compression, moderation, n):
+        import torch
+        import base64
+        import io
+        import urllib.request
+        import urllib.error
+        import json as _json
+
+        key = api_key.strip() or os.environ.get("OPENAI_API_KEY", "")
+        if not key:
+            raise ValueError("[WuddGptImage2] No API key provided and OPENAI_API_KEY env var not set.")
+
+        payload = {
+            "model": "gpt-image-2",
+            "prompt": prompt,
+            "n": n,
+            "size": size,
+            "quality": quality,
+            "output_format": output_format,
+            "response_format": "b64_json",
+        }
+        if output_format in ("jpeg", "webp"):
+            payload["output_compression"] = output_compression
+        if moderation != "auto":
+            payload["moderation"] = moderation
+
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/images/generations",
+            data=_json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {key}",
+            },
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(req) as resp:
+                result = _json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"[WuddGptImage2] API error {e.code}: {e.read().decode('utf-8')}")
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"[WuddGptImage2] Network error: {e.reason}")
+
+        images = []
+        revised_prompts = []
+        for item in result.get("data", []):
+            img_pil = Image.open(io.BytesIO(base64.b64decode(item.get("b64_json", "")))).convert("RGB")
+            images.append(torch.from_numpy(np.array(img_pil).astype(np.float32) / 255.0))
+            if "revised_prompt" in item:
+                revised_prompts.append(item["revised_prompt"])
+
+        if not images:
+            raise RuntimeError("[WuddGptImage2] No images returned from API.")
+
+        revised = "\n".join(revised_prompts) if revised_prompts else prompt
+        return (torch.stack(images), revised)
+
+
 class WuddImageStitch:
     """
     线性图像拼接节点。
