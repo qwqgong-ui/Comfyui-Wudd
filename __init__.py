@@ -1,4 +1,4 @@
-from .my_node_logic import WuddMultiSaveImage, WuddTextSplitter, WuddMultiTextSplitter, WuddDropAlpha, WuddEdgePad, WuddImageListImporter, WuddImageStitch
+from .my_node_logic import WuddMultiSaveImage, WuddTextSplitter, WuddMultiTextSplitter, WuddDropAlpha, WuddEdgePad, WuddImageListImporter, WuddImageStitch, WuddPathJoiner
 
 NODE_CLASS_MAPPINGS = {
     "WuddMultiSaveImage": WuddMultiSaveImage,
@@ -8,6 +8,7 @@ NODE_CLASS_MAPPINGS = {
     "WuddEdgePad": WuddEdgePad,
     "WuddImageListImporter": WuddImageListImporter,
     "WuddImageStitch": WuddImageStitch,
+    "WuddPathJoiner": WuddPathJoiner,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -18,6 +19,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WuddEdgePad": "Wudd Edge Pad",
     "WuddImageListImporter": "Wudd Image List Importer",
     "WuddImageStitch": "Wudd Image Stitch",
+    "WuddPathJoiner": "Wudd Path Joiner",
 }
 
 # 告诉 ComfyUI 加载当前目录下的 web 文件夹中的前端脚本
