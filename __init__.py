@@ -1,4 +1,4 @@
-from .my_node_logic import WuddMultiSaveImage, WuddTextSplitter, WuddMultiTextSplitter, WuddDropAlpha, WuddEdgePad, WuddImageListImporter, WuddImageStitch, WuddPathJoiner
+from .my_node_logic import WuddMultiSaveImage, WuddTextSplitter, WuddMultiTextSplitter, WuddDropAlpha, WuddEdgePad, WuddImageListImporter, WuddImageStitch, WuddPathJoiner, WuddOpenAIGPT54
 
 NODE_CLASS_MAPPINGS = {
     "WuddMultiSaveImage": WuddMultiSaveImage,
@@ -9,6 +9,7 @@ NODE_CLASS_MAPPINGS = {
     "WuddImageListImporter": WuddImageListImporter,
     "WuddImageStitch": WuddImageStitch,
     "WuddPathJoiner": WuddPathJoiner,
+    "WuddOpenAIGPT54": WuddOpenAIGPT54,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -20,6 +21,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WuddImageListImporter": "Wudd Image List Importer",
     "WuddImageStitch": "Wudd Image Stitch",
     "WuddPathJoiner": "Wudd Path Joiner",
+    "WuddOpenAIGPT54": "Wudd OpenAI GPT-5.4",
 }
 
 # 告诉 ComfyUI 加载当前目录下的 web 文件夹中的前端脚本
