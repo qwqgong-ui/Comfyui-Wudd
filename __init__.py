@@ -1,4 +1,28 @@
-from .my_node_logic import WuddMultiSaveImage, WuddTextSplitter, WuddMultiTextSplitter, WuddDropAlpha, WuddEdgePad, WuddImageListImporter, WuddImageStitch, WuddPathJoiner, WuddOpenAIGPT54
+"""
+ComfyUI-Wudd — 节点注册入口。
+
+节点按功能域拆分到以下文件：
+    nodes_common.py  共享常量与工具
+    nodes_image.py   图像类节点（Save / DropAlpha / EdgePad / ListImporter / Stitch）
+    nodes_text.py    文本类节点（TextSplitter / MultiTextSplitter / PathJoiner）
+    nodes_api.py     外部 API 节点（OpenAIGPT54）
+前端动态端口脚本位于 ./web/dynamic_ports.js，由 WEB_DIRECTORY 告知 ComfyUI 加载。
+"""
+
+from .nodes_image import (
+    WuddMultiSaveImage,
+    WuddDropAlpha,
+    WuddEdgePad,
+    WuddImageListImporter,
+    WuddImageStitch,
+)
+from .nodes_text import (
+    WuddTextSplitter,
+    WuddMultiTextSplitter,
+    WuddPathJoiner,
+)
+from .nodes_api import WuddOpenAIGPT54
+
 
 NODE_CLASS_MAPPINGS = {
     "WuddMultiSaveImage": WuddMultiSaveImage,
