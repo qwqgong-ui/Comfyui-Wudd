@@ -272,5 +272,84 @@ app.registerExtension({
                 } catch (e) {}
             };
         }
+
+        // ==========================================
+        // WuddImageStitch — 按数量刷新输入端口
+        // ==========================================
+        if (nodeData.name === "WuddImageStitch") {
+            function applyStitchInputCount(node, count) {
+                const maxInputs = Math.max(1, Math.min(Number(count) || 1, 16));
+                const desiredNames = new Set(["image_1"]);
+                for (let i = 2; i <= maxInputs; i++) {
+                    desiredNames.add(`image_${i}`);
+                }
+
+                // 删除超出数量的输入端口，倒序删避免索引漂移。
+                for (let i = (node.inputs?.length || 0) - 1; i >= 0; i--) {
+                    const input = node.inputs[i];
+                    if (input?.name?.startsWith("image_") && !desiredNames.has(input.name)) {
+                        node.removeInput(i);
+                    }
+                }
+
+                // 按顺序补齐缺失的输入端口。
+                const existingNames = new Set((node.inputs || []).map(input => input.name));
+                for (let i = 2; i <= maxInputs; i++) {
+                    const name = `image_${i}`;
+                    if (!existingNames.has(name)) {
+                        node.addInput(name, "IMAGE");
+                    }
+                }
+
+                // 确保 image_* 输入按编号排序，避免按钮刷新后顺序错乱。
+                if (node.inputs && node.inputs.length > 1) {
+                    const first = node.inputs[0];
+                    const rest = node.inputs.slice(1).sort((a, b) => {
+                        const aNum = parseInt(String(a.name).split("_")[1] || "999", 10);
+                        const bNum = parseInt(String(b.name).split("_")[1] || "999", 10);
+                        return aNum - bNum;
+                    });
+                    node.inputs = [first, ...rest];
+                }
+
+                if (node.setSize && node.computeSize) {
+                    try { node.setSize(node.computeSize()); } catch (e) {}
+                }
+                if (node.setDirtyCanvas) node.setDirtyCanvas(true, true);
+                if (app.graph?.setDirtyCanvas) app.graph.setDirtyCanvas(true, true);
+            }
+
+            const onNodeCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                if (onNodeCreated) onNodeCreated.apply(this, arguments);
+
+                try {
+                    const node = this;
+                    const countWidget = node.widgets?.find(w => w.name === "input_count");
+                    if (!countWidget) return;
+
+                    const refreshInputs = () => applyStitchInputCount(node, countWidget.value);
+
+                    const origCallback = countWidget.callback;
+                    countWidget.callback = function () {
+                        refreshInputs();
+                        if (origCallback) return origCallback.apply(this, arguments);
+                    };
+
+                    setTimeout(refreshInputs, 50);
+                } catch (e) {
+                    console.error("Wudd ImageStitch Error:", e);
+                }
+            };
+
+            const onConfigure = nodeType.prototype.onConfigure;
+            nodeType.prototype.onConfigure = function (config) {
+                if (onConfigure) onConfigure.apply(this, arguments);
+                try {
+                    const countWidget = this.widgets?.find(w => w.name === "input_count");
+                    if (countWidget) applyStitchInputCount(this, countWidget.value);
+                } catch (e) {}
+            };
+        }
     }
 });
