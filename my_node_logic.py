@@ -1,3 +1,17 @@
+"""
+ComfyUI-Wudd — 节点实现模块。
+
+本文件负责实现节点的运行时行为；节点"规范层"（CATEGORY、输入/输出约定、
+共享工具函数）在本模块顶部集中声明，便于审阅、一致性校验以及未来扩展。
+
+规范层 / 实现层分工：
+    规范层  → WUDD_CATEGORY、_image_index、collect_image_inputs、
+              tensor_to_pil、pil_to_tensor、tensor_to_base64_png、CREATE_NO_WINDOW
+    实现层  → 每个节点类内部的算法方法（_chamfer、_wait_for_response 等）
+
+说明文档：`ai_skill.md`（节点逻辑总览）。
+"""
+
 import os
 import re
 import sys
@@ -15,8 +29,74 @@ from io import BytesIO
 from urllib.parse import urljoin, urlparse
 import folder_paths
 
-# Windows 下隐藏 cjpegli 弹出的黑框；非 Windows 上此 flag 为 0（no-op）
+
+# ──────────────────────────────────────────────────────────────────────────
+# 模块级规范层：所有 Wudd 节点的共享常量与工具函数
+# ──────────────────────────────────────────────────────────────────────────
+
+# 所有节点在 ComfyUI 菜单下的统一分类名；集中声明，重命名只改一处。
+WUDD_CATEGORY = "Wudd Nodes"
+
+# Windows 下隐藏 cjpegli 弹出的黑框；非 Windows 上此 flag 为 0（no-op）。
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+
+# `collect_image_inputs` 中缺失索引时的"放到最后"哨兵值。
+_IMAGE_INDEX_SENTINEL = 10 ** 9
+
+
+def _image_index(name):
+    """从 'image_N' 风格的键里抽取数字索引；缺失/非法时回退到末尾哨兵值。"""
+    try:
+        return int(name.split("_", 1)[1])
+    except (ValueError, IndexError):
+        return _IMAGE_INDEX_SENTINEL
+
+
+def collect_image_inputs(primary, extras, max_n=None):
+    """
+    合并 `image_1`（primary）与 `image_*`（extras kwargs）并按数字索引排序，
+    过滤掉 None 值。可选 max_n 限制上界（例如 input_count）。
+    返回 list[tensor]，按 image_1 → image_2 → … 顺序。
+    """
+    all_inputs = {"image_1": primary, **(extras or {})}
+    items = [(k, v) for k, v in all_inputs.items()
+             if k.startswith("image_") and v is not None]
+    items.sort(key=lambda kv: _image_index(kv[0]))
+    if max_n is not None:
+        items = [(k, v) for k, v in items if _image_index(k) <= max_n]
+    return [v for _, v in items]
+
+
+def tensor_to_pil(image_tensor):
+    """
+    ComfyUI IMAGE 单帧 → PIL 图像。
+    接受 [H, W, C] 或 [1, H, W, C] 两种形状；C=3 → RGB，C=4 → RGBA。
+    """
+    arr = image_tensor
+    if arr.ndim == 4:
+        arr = arr[0]
+    img_np = (255.0 * arr.cpu().numpy()).clip(0, 255).astype(np.uint8)
+    mode = "RGBA" if img_np.shape[-1] == 4 else "RGB"
+    return Image.fromarray(img_np, mode=mode)
+
+
+def pil_to_tensor(pil_img):
+    """PIL 图像 → ComfyUI IMAGE 单帧，形状 [1, H, W, C]，float32，值域 [0,1]。"""
+    import torch
+    arr = np.array(pil_img).astype(np.float32) / 255.0
+    return torch.from_numpy(arr).unsqueeze(0)
+
+
+def tensor_to_base64_png(image_tensor):
+    """ComfyUI IMAGE 单帧 → base64 PNG 字符串（用于 data URL 内联）。"""
+    buffer = BytesIO()
+    tensor_to_pil(image_tensor).save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 节点实现
+# ──────────────────────────────────────────────────────────────────────────
 
 
 class WuddMultiSaveImage:
@@ -33,7 +113,7 @@ class WuddMultiSaveImage:
                   f"jpegli mode will fall back to PIL JPEG.")
 
     @classmethod
-    def INPUT_TYPES(s):
+    def INPUT_TYPES(cls):
         return {
             "required": {
                 "image_1": ("IMAGE",),
@@ -54,17 +134,9 @@ class WuddMultiSaveImage:
     RETURN_TYPES = ()
     FUNCTION = "save_images"
     OUTPUT_NODE = True
-    CATEGORY = "Wudd Nodes"
+    CATEGORY = WUDD_CATEGORY
 
     # ---------- helpers ----------
-
-    @staticmethod
-    def _image_key_order(key):
-        """把 image_1 / image_10 / image_2 按数字排序而不是字典序。"""
-        try:
-            return int(key.split("_", 1)[1])
-        except (ValueError, IndexError):
-            return 10 ** 9
 
     @staticmethod
     def _find_next_run(folder, filename, ext):
@@ -177,16 +249,11 @@ class WuddMultiSaveImage:
 
         ext = "jpg" if extension == "jpegli" else "png"
 
-        # 合并所有图像输入，按数字序排列
-        all_images = {"image_1": image_1, **kwargs}
-        ordered_keys = sorted(
-            (k for k, v in all_images.items()
-             if k.startswith("image_") and v is not None),
-            key=self._image_key_order,
-        )
+        # 合并并按编号排序所有图像输入
+        tensors = collect_image_inputs(image_1, kwargs)
 
         # 统计本次调用的图像总数，用于覆盖模式的命名判断
-        total_images = sum(len(all_images[k]) for k in ordered_keys)
+        total_images = sum(len(t) for t in tensors)
 
         png_metadata = (self._build_pnginfo(prompt, extra_pnginfo)
                         if extension == "png" else None)
@@ -198,12 +265,10 @@ class WuddMultiSaveImage:
         results = []
         seq = 0  # 本次调用内的图像序号（1-based）
 
-        for key in ordered_keys:
-            images = all_images[key]
+        for images in tensors:
             for image in images:
                 seq += 1
-                i_data = (255.0 * image.cpu().numpy()).clip(0, 255).astype(np.uint8)
-                img_pil = Image.fromarray(i_data)
+                img_pil = tensor_to_pil(image)
 
                 if save_mode == "overwrite":
                     # 覆盖模式：文件名固定，每次运行都写同一批文件
@@ -263,10 +328,10 @@ class WuddDropAlpha:
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("image",)
     FUNCTION = "drop_alpha"
-    CATEGORY = "Wudd Nodes"
+    CATEGORY = WUDD_CATEGORY
 
     @staticmethod
-    def _parse_hex_color(hex_str: str):
+    def _parse_hex_color(hex_str):
         """'#RRGGBB' → (r, g, b) float 0-1，解析失败返回中灰。"""
         s = hex_str.strip().lstrip("#")
         if len(s) == 3:
@@ -384,7 +449,7 @@ class WuddEdgePad:
     RETURN_TYPES  = ("IMAGE",) * MAX_INPUTS
     RETURN_NAMES  = tuple(f"image_{i}" for i in range(1, MAX_INPUTS + 1))
     FUNCTION      = "pad_edges"
-    CATEGORY      = "Wudd Nodes"
+    CATEGORY      = WUDD_CATEGORY
 
     # ------------------------------------------------------------------ helpers
 
@@ -460,13 +525,8 @@ class WuddEdgePad:
                   blend_sigma, chamfer_pct, **kwargs):
         import torch
 
-        all_inputs  = {"image_1": image_1, **kwargs}
-        ordered_keys = sorted(
-            (k for k in all_inputs if k.startswith("image_") and all_inputs[k] is not None),
-            key=lambda k: int(k.split("_", 1)[1]),
-        )
-        arrs = [all_inputs[k][0].cpu().numpy().copy().astype(np.float32)
-                for k in ordered_keys]
+        tensors = collect_image_inputs(image_1, kwargs)
+        arrs = [t[0].cpu().numpy().copy().astype(np.float32) for t in tensors]
         N = len(arrs)
 
         # ── 第一步：预先计算每张图的 top_pad / bot_pad ──────────────────────
@@ -533,7 +593,7 @@ class WuddPathJoiner:
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("path",)
     FUNCTION = "join_path"
-    CATEGORY = "Wudd Nodes"
+    CATEGORY = WUDD_CATEGORY
 
     def join_path(self, count, segment_1, segment_2, segment_3, segment_4, segment_5):
         all_segments = [segment_1, segment_2, segment_3, segment_4, segment_5]
@@ -543,7 +603,7 @@ class WuddPathJoiner:
 
 class WuddTextSplitter:
     @classmethod
-    def INPUT_TYPES(s):
+    def INPUT_TYPES(cls):
         return {
             "required": {
                 "text": ("STRING", {"multiline": True, "default": ""}),
@@ -554,7 +614,7 @@ class WuddTextSplitter:
 
     RETURN_TYPES = ("STRING",)
     FUNCTION = "split_text"
-    CATEGORY = "Wudd Nodes"
+    CATEGORY = WUDD_CATEGORY
 
     def split_text(self, text, index, skip_empty=False):
         lines = text.splitlines()
@@ -569,11 +629,11 @@ class WuddMultiTextSplitter:
     MAX_OUTPUTS = 16  # JS 端同步保持此上限
 
     @classmethod
-    def INPUT_TYPES(s):
+    def INPUT_TYPES(cls):
         return {
             "required": {
                 "text": ("STRING", {"multiline": True, "default": ""}),
-                "count": ("INT", {"default": 2, "min": 1, "max": s.MAX_OUTPUTS}),
+                "count": ("INT", {"default": 2, "min": 1, "max": cls.MAX_OUTPUTS}),
                 "skip_empty": ("BOOLEAN", {"default": False}),
             }
         }
@@ -582,7 +642,7 @@ class WuddMultiTextSplitter:
     RETURN_TYPES = ("STRING",) * MAX_OUTPUTS
     RETURN_NAMES = tuple(f"line_{i}" for i in range(MAX_OUTPUTS))
     FUNCTION = "split_text"
-    CATEGORY = "Wudd Nodes"
+    CATEGORY = WUDD_CATEGORY
 
     def split_text(self, text, count, skip_empty=False):
         lines = text.splitlines()
@@ -591,33 +651,59 @@ class WuddMultiTextSplitter:
         # 返回恰好 MAX_OUTPUTS 个值；超出 count 的槽只是空字符串，前端不连接即可
         return tuple(lines[i] if i < len(lines) else "" for i in range(self.MAX_OUTPUTS))
 
+
 class WuddImageListImporter:
     MAX_IMAGES = 50
 
     @classmethod
-    def INPUT_TYPES(s):
+    def _list_input_files(cls):
+        """列出 ComfyUI input 目录下的文件；目录缺失/不可读时返回占位 ['none']。"""
         input_dir = folder_paths.get_input_directory()
-        files = [f for f in os.listdir(input_dir) if os.path.isfile(os.path.join(input_dir, f))]
+        try:
+            files = [f for f in os.listdir(input_dir)
+                     if os.path.isfile(os.path.join(input_dir, f))]
+        except OSError:
+            files = []
+        return files if files else ["none"]
 
-        # We need a fallback if no files exist
-        if len(files) == 0:
-            files = ["none"]
-
+    @classmethod
+    def INPUT_TYPES(cls):
+        files = cls._list_input_files()
         inputs = {
             "required": {
-                "image_count": ("INT", {"default": 1, "min": 1, "max": s.MAX_IMAGES, "step": 1}),
+                "image_count": ("INT", {"default": 1, "min": 1, "max": cls.MAX_IMAGES, "step": 1}),
             },
-            "optional": {}
+            "optional": {},
         }
-        for i in range(1, s.MAX_IMAGES + 1):
+        for i in range(1, cls.MAX_IMAGES + 1):
             inputs["required"][f"image_{i}"] = (files, {"image_upload": True})
-
         return inputs
+
+    @classmethod
+    def IS_CHANGED(cls, image_count, **kwargs):
+        """
+        文件系统依赖节点的正确缓存键：文件名 + 该文件的 mtime。
+        避免"同一文件名但磁盘内容已更新"时工作流误命中旧缓存。
+        """
+        parts = [str(image_count)]
+        for i in range(1, cls.MAX_IMAGES + 1):
+            if i > image_count:
+                continue
+            name = kwargs.get(f"image_{i}", "")
+            parts.append(str(name))
+            if name and name != "none":
+                try:
+                    path = folder_paths.get_annotated_filepath(name)
+                    if os.path.exists(path):
+                        parts.append(str(os.path.getmtime(path)))
+                except Exception:
+                    pass
+        return "|".join(parts)
 
     RETURN_TYPES = tuple(["IMAGE"] * MAX_IMAGES)
     RETURN_NAMES = tuple([f"image_{i}" for i in range(1, MAX_IMAGES + 1)])
     FUNCTION = "import_images"
-    CATEGORY = "Wudd Nodes"
+    CATEGORY = WUDD_CATEGORY
 
     def import_images(self, image_count, **kwargs):
         import torch
@@ -635,10 +721,7 @@ class WuddImageListImporter:
                     try:
                         i_img = Image.open(image_path)
                         i_img = ImageOps.exif_transpose(i_img)
-                        image = i_img.convert("RGB")
-                        image = np.array(image).astype(np.float32) / 255.0
-                        image = torch.from_numpy(image)[None,]
-                        images.append(image)
+                        images.append(pil_to_tensor(i_img.convert("RGB")))
                     except Exception as e:
                         print(f"[WuddImageListImporter] Error loading image {image_name}: {e}")
                         # Fallback empty image
@@ -676,51 +759,32 @@ class WuddImageStitch:
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("image",)
     FUNCTION     = "stitch"
-    CATEGORY     = "Wudd Nodes"
+    CATEGORY     = WUDD_CATEGORY
 
     # ── 工具函数 ──────────────────────────────────────────────────────
 
-    @staticmethod
-    def _t2pil(t):
-        """[1,H,W,C] float32 → PIL RGB"""
-        return Image.fromarray(
-            (t[0].cpu().numpy() * 255.0).clip(0, 255).astype(np.uint8)
-        )
-
-    @staticmethod
-    def _pil2t(pil):
-        """PIL RGB → [1,H,W,C] float32"""
-        import torch
-        return torch.from_numpy(
-            np.array(pil).astype(np.float32) / 255.0
-        ).unsqueeze(0)
-
     def _fit_height(self, img, target_h):
         """缩放图像使高度=target_h，宽度等比例变化。"""
-        pil  = self._t2pil(img)
+        pil  = tensor_to_pil(img)
         w, h = pil.size
         new_w = max(1, round(w * target_h / h))
-        return self._pil2t(pil.resize((new_w, target_h), Image.LANCZOS))
+        return pil_to_tensor(pil.resize((new_w, target_h), Image.LANCZOS))
 
     def _fit_width(self, img, target_w):
         """缩放图像使宽度=target_w，高度等比例变化。"""
-        pil  = self._t2pil(img)
+        pil  = tensor_to_pil(img)
         w, h = pil.size
         new_h = max(1, round(h * target_w / w))
-        return self._pil2t(pil.resize((target_w, new_h), Image.LANCZOS))
+        return pil_to_tensor(pil.resize((target_w, new_h), Image.LANCZOS))
 
     # ── 主逻辑 ────────────────────────────────────────────────────────
 
     def stitch(self, image_1, direction, gap, input_count, **kwargs):
         import torch
 
-        # 收集所有有效图像（按编号顺序）
-        images = [image_1]
+        # 收集所有有效图像（按编号顺序），受 input_count 限制
         max_inputs = max(1, min(int(input_count), self.MAX_INPUTS))
-        for i in range(2, max_inputs + 1):
-            img = kwargs.get(f"image_{i}")
-            if img is not None:
-                images.append(img)
+        images = collect_image_inputs(image_1, kwargs, max_n=max_inputs)
 
         if len(images) == 1:
             return (image_1,)
@@ -783,7 +847,7 @@ class WuddOpenAIGPT54:
                 "prompt": ("STRING", {"default": "", "multiline": True}),
                 "api_key": ("STRING", {"default": ""}),
                 "base_url": ("STRING", {"default": "https://api.openai.com/v1"}),
-                "model": (["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"], {"default": "gpt-5.4"}),
+                "model": ("STRING", {"default": "gpt-5.4"}),
                 "api_mode": (["responses", "chat_completions"], {"default": "responses"}),
                 "reasoning_effort": (["none", "low", "medium", "high", "xhigh"], {"default": "medium"}),
                 "verbosity": (["low", "medium", "high"], {"default": "medium"}),
