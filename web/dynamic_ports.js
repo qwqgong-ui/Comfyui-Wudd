@@ -1,5 +1,140 @@
 import { app } from "../../scripts/app.js";
 
+const INPUT = 1;
+
+function clampInt(value, min, max) {
+    const n = Number.parseInt(value, 10);
+    if (!Number.isFinite(n)) return min;
+    return Math.max(min, Math.min(n, max));
+}
+
+function indexedSlotNumber(name, prefix) {
+    const value = String(name || "");
+    if (!value.startsWith(prefix)) return null;
+    const n = Number.parseInt(value.slice(prefix.length), 10);
+    return Number.isFinite(n) ? n : null;
+}
+
+function slotHasLink(slot) {
+    return slot?.link != null || (Array.isArray(slot?.links) && slot.links.length > 0);
+}
+
+function highestLinkedIndex(slots, prefix) {
+    let highest = 0;
+    for (const slot of slots || []) {
+        if (!slotHasLink(slot)) continue;
+        const idx = indexedSlotNumber(slot.name, prefix);
+        if (idx != null) highest = Math.max(highest, idx);
+    }
+    return highest;
+}
+
+function rememberWidget(widget) {
+    if (!widget || widget.__wuddOriginalType !== undefined) return;
+    widget.__wuddOriginalType = widget.origType ?? widget.type;
+    widget.__wuddOriginalComputeSize = widget.origComputeSize ?? widget.computeSize;
+    widget.origType ??= widget.__wuddOriginalType;
+    widget.origComputeSize ??= widget.__wuddOriginalComputeSize;
+}
+
+function setWidgetVisible(widget, visible) {
+    if (!widget) return false;
+    rememberWidget(widget);
+
+    if (visible) {
+        if (widget.type !== widget.__wuddOriginalType) {
+            widget.type = widget.__wuddOriginalType;
+            widget.computeSize = widget.__wuddOriginalComputeSize;
+            return true;
+        }
+        return false;
+    }
+
+    if (widget.type !== "hidden") {
+        widget.type = "hidden";
+        widget.computeSize = () => [0, -4];
+        return true;
+    }
+    return false;
+}
+
+function refreshNode(node, defer = false) {
+    const doRefresh = () => {
+        if (node.setSize && node.computeSize) {
+            try { node.setSize(node.computeSize()); } catch (e) {}
+        }
+        if (node.setDirtyCanvas) node.setDirtyCanvas(true, true);
+        if (app.graph?.setDirtyCanvas) app.graph.setDirtyCanvas(true, true);
+    };
+    if (defer) setTimeout(doRefresh, 10);
+    else doRefresh();
+}
+
+function wireCountWidget(node, widgetName, apply) {
+    const countWidget = node.widgets?.find(w => w.name === widgetName);
+    if (!countWidget) return;
+
+    const origCallback = countWidget.callback;
+    countWidget.callback = function () {
+        apply();
+        if (origCallback) return origCallback.apply(this, arguments);
+    };
+
+    setTimeout(apply, 50);
+}
+
+function syncOutputCount(node, countWidget, options) {
+    const { max, prefix, type, firstIndex } = options;
+    const requested = clampInt(countWidget?.value, 1, max);
+    const linkedMin = highestLinkedIndex(node.outputs, prefix);
+    const count = Math.max(requested, firstIndex === 0 ? linkedMin + 1 : linkedMin, 1);
+
+    if (countWidget && countWidget.value !== count) {
+        countWidget.value = count;
+    }
+
+    while (!node.outputs || node.outputs.length < count) {
+        const idx = firstIndex + (node.outputs?.length || 0);
+        node.addOutput(`${prefix}${idx}`, type);
+    }
+
+    while (node.outputs && node.outputs.length > count) {
+        const last = node.outputs[node.outputs.length - 1];
+        if (slotHasLink(last)) break;
+        node.removeOutput(node.outputs.length - 1);
+    }
+
+    refreshNode(node);
+}
+
+function syncImageInputs(node, countWidget, options) {
+    const { max, prefix, type } = options;
+    const requested = clampInt(countWidget?.value, 1, max);
+    const count = Math.max(requested, highestLinkedIndex(node.inputs, prefix), 1);
+
+    if (countWidget && countWidget.value !== count) {
+        countWidget.value = count;
+    }
+
+    for (let i = (node.inputs?.length || 0) - 1; i >= 0; i--) {
+        const input = node.inputs[i];
+        const idx = indexedSlotNumber(input?.name, prefix);
+        if (idx != null && idx > count && !slotHasLink(input)) {
+            node.removeInput(i);
+        }
+    }
+
+    const existing = new Set((node.inputs || []).map(input => input.name));
+    for (let i = 2; i <= count; i++) {
+        const name = `${prefix}${i}`;
+        if (!existing.has(name)) {
+            node.addInput(name, type);
+        }
+    }
+
+    refreshNode(node);
+}
+
 app.registerExtension({
     name: "Wudd.DynamicPorts",
     async beforeRegisterNodeDef(nodeType, nodeData) {
@@ -9,7 +144,6 @@ app.registerExtension({
         // ==========================================
         if (nodeData.name === "WuddMultiSaveImage") {
 
-            // 1. 动态输入端口逻辑
             const onConnectionsChange = nodeType.prototype.onConnectionsChange;
             nodeType.prototype.onConnectionsChange = function (type, index, connected, link_info) {
                 if (onConnectionsChange) onConnectionsChange.apply(this, arguments);
@@ -17,19 +151,17 @@ app.registerExtension({
                 if (this.__isUpdatingPorts) return;
                 this.__isUpdatingPorts = true;
 
-                // type 1 = INPUT
-                if (type === 1 && this.inputs && this.inputs.length > 0) {
+                if (type === INPUT && this.inputs && this.inputs.length > 0) {
                     try {
-                        // 清理尾部多余空闲端口，始终保留最后 1 个空端口
                         while (this.inputs.length > 1 &&
                                !this.inputs[this.inputs.length - 1].link &&
                                !this.inputs[this.inputs.length - 2].link) {
                             this.removeInput(this.inputs.length - 1);
                         }
-                        // 最后一个端口被连上时自动新增一个空端口
+
                         const lastInput = this.inputs[this.inputs.length - 1];
-                        if (lastInput && lastInput.link) {
-                            this.addInput("image_" + (this.inputs.length + 1), "IMAGE");
+                        if (lastInput?.link) {
+                            this.addInput(`image_${this.inputs.length + 1}`, "IMAGE");
                         }
                     } catch (e) {
                         console.error("Wudd Ports Error:", e);
@@ -39,7 +171,6 @@ app.registerExtension({
                 this.__isUpdatingPorts = false;
             };
 
-            // 2. 加载旧工作流时修复因 widget 版本迭代导致的值错位
             const COMBO_DEFAULTS = {
                 save_mode:          { valid: ["append", "overwrite"],          def: "append" },
                 extension:          { valid: ["png", "jpegli"],                def: "png"    },
@@ -58,50 +189,23 @@ app.registerExtension({
                 });
             };
 
-            // 3. Jpegli 相关 widget 显隐逻辑
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 if (onNodeCreated) onNodeCreated.apply(this, arguments);
 
                 try {
                     const extWidget = this.widgets?.find(w => w.name === "extension");
-                    const targetNames = ["quality", "progressive", "enable_xyb", "chroma_subsampling"];
+                    const targetNames = new Set(["quality", "progressive", "enable_xyb", "chroma_subsampling"]);
 
                     const refresh = () => {
-                        if (!this.widgets) return;
                         const isJpegli = extWidget?.value === "jpegli";
-                        let visibilityChanged = false;
-
-                        this.widgets.forEach(w => {
-                            if (targetNames.includes(w.name)) {
-                                if (w.origType === undefined) {
-                                    w.origType = w.type;
-                                    w.origComputeSize = w.computeSize;
-                                }
-                                if (isJpegli) {
-                                    if (w.type !== w.origType) {
-                                        w.type = w.origType;
-                                        w.computeSize = w.origComputeSize;
-                                        visibilityChanged = true;
-                                    }
-                                } else {
-                                    if (w.type !== "hidden") {
-                                        w.type = "hidden";
-                                        w.computeSize = () => [0, -4];
-                                        visibilityChanged = true;
-                                    }
-                                }
+                        let changed = false;
+                        for (const widget of this.widgets || []) {
+                            if (targetNames.has(widget.name)) {
+                                changed = setWidgetVisible(widget, isJpegli) || changed;
                             }
-                        });
-
-                        if (visibilityChanged && this.setSize && this.computeSize) {
-                            setTimeout(() => {
-                                try {
-                                    this.setSize(this.computeSize());
-                                    if (this.setDirtyCanvas) this.setDirtyCanvas(true, true);
-                                } catch (e) {}
-                            }, 10);
                         }
+                        if (changed) refreshNode(this, true);
                     };
 
                     if (extWidget) {
@@ -122,57 +226,33 @@ app.registerExtension({
         // WuddMultiTextSplitter — 动态输出端口
         // ==========================================
         if (nodeData.name === "WuddMultiTextSplitter") {
-
-            // 独立辅助函数，避免 this 绑定问题，onNodeCreated / onConfigure 均可调用
-            function applyOutputCount(node, count) {
-                while (node.outputs && node.outputs.length > count) {
-                    node.removeOutput(node.outputs.length - 1);
+            const applyOutputCount = node => {
+                const countWidget = node.widgets?.find(w => w.name === "count");
+                if (countWidget) {
+                    syncOutputCount(node, countWidget, {
+                        max: 16,
+                        prefix: "line_",
+                        type: "STRING",
+                        firstIndex: 0,
+                    });
                 }
-                while (!node.outputs || node.outputs.length < count) {
-                    const idx = node.outputs ? node.outputs.length : 0;
-                    node.addOutput(`line_${idx}`, "STRING");
-                }
-                if (node.setSize && node.computeSize) {
-                    try { node.setSize(node.computeSize()); } catch (e) {}
-                }
-                if (node.setDirtyCanvas) node.setDirtyCanvas(true, true);
-            }
+            };
 
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 if (onNodeCreated) onNodeCreated.apply(this, arguments);
 
                 try {
-                    const countWidget = this.widgets?.find(w => w.name === "count");
-                    if (!countWidget) return;
-
-                    const node = this;
-
-                    // 监听 count widget 变化
-                    const origCallback = countWidget.callback;
-                    countWidget.callback = function () {
-                        applyOutputCount(node, countWidget.value);
-                        if (origCallback) return origCallback.apply(this, arguments);
-                    };
-
-                    // 新建节点时初始化输出槽数量
-                    // 延迟执行以等待 ComfyUI 完成默认输出槽的注册
-                    setTimeout(() => applyOutputCount(node, countWidget.value), 50);
+                    wireCountWidget(this, "count", () => applyOutputCount(this));
                 } catch (e) {
                     console.error("Wudd MultiTextSplitter Error:", e);
                 }
             };
 
-            // 加载旧工作流时，onConfigure 在 widget 值恢复后同步调用，
-            // 此时 countWidget.value 已是保存的值，直接对齐输出槽数量，
-            // 消除 setTimeout 与配置恢复之间的竞态条件。
             const onConfigure = nodeType.prototype.onConfigure;
             nodeType.prototype.onConfigure = function (config) {
                 if (onConfigure) onConfigure.apply(this, arguments);
-                try {
-                    const countWidget = this.widgets?.find(w => w.name === "count");
-                    if (countWidget) applyOutputCount(this, countWidget.value);
-                } catch (e) {}
+                try { applyOutputCount(this); } catch (e) {}
             };
         }
 
@@ -180,84 +260,44 @@ app.registerExtension({
         // WuddImageListImporter — 动态输入与输出
         // ==========================================
         if (nodeData.name === "WuddImageListImporter") {
-            function applyImageCount(node, count) {
-                // 1. Show/hide upload widgets and their corresponding buttons
-                if (node.widgets) {
-                    for (let i = 0; i < node.widgets.length; i++) {
-                        const w = node.widgets[i];
-                        if (w.name && w.name.startsWith("image_")) {
-                            const match = w.name.match(/^image_(\d+)$/);
-                            if (match) {
-                                const idx = parseInt(match[1]);
-                                const shouldHide = idx > count;
-                                
-                                // Hide/show combo widget
-                                if (shouldHide) {
-                                    if (w.type !== "hidden") {
-                                        w.origType = w.type;
-                                        w.origComputeSize = w.computeSize;
-                                        w.type = "hidden";
-                                        w.computeSize = () => [0, -4];
-                                    }
-                                } else {
-                                    if (w.type === "hidden" && w.origType) {
-                                        w.type = w.origType;
-                                        w.computeSize = w.origComputeSize;
-                                    }
-                                }
+            function applyImageCount(node) {
+                const countWidget = node.widgets?.find(w => w.name === "image_count");
+                if (!countWidget) return;
 
-                                // ComfyUI injects the upload button immediately after the combo widget
-                                const nextW = node.widgets[i + 1];
-                                if (nextW && nextW.type === "button") {
-                                    if (shouldHide) {
-                                        if (nextW.type !== "hidden") {
-                                            nextW.origType = nextW.type;
-                                            nextW.origComputeSize = nextW.computeSize;
-                                            nextW.type = "hidden";
-                                            nextW.computeSize = () => [0, -4];
-                                        }
-                                    } else {
-                                        if (nextW.type === "hidden" && nextW.origType) {
-                                            nextW.type = nextW.origType;
-                                            nextW.computeSize = nextW.origComputeSize;
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                syncOutputCount(node, countWidget, {
+                    max: 50,
+                    prefix: "image_",
+                    type: "IMAGE",
+                    firstIndex: 1,
+                });
+
+                const count = clampInt(countWidget.value, 1, 50);
+                let changed = false;
+                for (let i = 0; i < (node.widgets?.length || 0); i++) {
+                    const widget = node.widgets[i];
+                    const idx = indexedSlotNumber(widget?.name, "image_");
+                    if (idx == null) continue;
+
+                    const visible = idx <= count;
+                    changed = setWidgetVisible(widget, visible) || changed;
+
+                    const maybeButton = node.widgets[i + 1];
+                    const isUploadButton = maybeButton?.type === "button" ||
+                        maybeButton?.__wuddOriginalType === "button" ||
+                        maybeButton?.origType === "button";
+                    if (isUploadButton) {
+                        changed = setWidgetVisible(maybeButton, visible) || changed;
                     }
                 }
-                
-                // 2. Add/remove output ports
-                while (node.outputs && node.outputs.length > count) {
-                    node.removeOutput(node.outputs.length - 1);
-                }
-                while (!node.outputs || node.outputs.length < count) {
-                    const idx = node.outputs ? node.outputs.length + 1 : 1;
-                    node.addOutput(`image_${idx}`, "IMAGE");
-                }
-                
-                if (node.setSize && node.computeSize) {
-                    try { node.setSize(node.computeSize()); } catch (e) {}
-                }
-                if (node.setDirtyCanvas) node.setDirtyCanvas(true, true);
+
+                if (changed) refreshNode(node);
             }
 
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 if (onNodeCreated) onNodeCreated.apply(this, arguments);
                 try {
-                    const countWidget = this.widgets?.find(w => w.name === "image_count");
-                    if (!countWidget) return;
-                    const node = this;
-                    
-                    const origCallback = countWidget.callback;
-                    countWidget.callback = function () {
-                        applyImageCount(node, countWidget.value);
-                        if (origCallback) return origCallback.apply(this, arguments);
-                    };
-                    
-                    setTimeout(() => applyImageCount(node, countWidget.value), 50);
+                    wireCountWidget(this, "image_count", () => applyImageCount(this));
                 } catch (e) {
                     console.error("Wudd ImageListImporter Error:", e);
                 }
@@ -266,10 +306,7 @@ app.registerExtension({
             const onConfigure = nodeType.prototype.onConfigure;
             nodeType.prototype.onConfigure = function (config) {
                 if (onConfigure) onConfigure.apply(this, arguments);
-                try {
-                    const countWidget = this.widgets?.find(w => w.name === "image_count");
-                    if (countWidget) applyImageCount(this, countWidget.value);
-                } catch (e) {}
+                try { applyImageCount(this); } catch (e) {}
             };
         }
 
@@ -277,66 +314,23 @@ app.registerExtension({
         // WuddImageStitch — 按数量刷新输入端口
         // ==========================================
         if (nodeData.name === "WuddImageStitch") {
-            function applyStitchInputCount(node, count) {
-                const maxInputs = Math.max(1, Math.min(Number(count) || 1, 16));
-                const desiredNames = new Set(["image_1"]);
-                for (let i = 2; i <= maxInputs; i++) {
-                    desiredNames.add(`image_${i}`);
-                }
-
-                // 删除超出数量的输入端口，倒序删避免索引漂移。
-                for (let i = (node.inputs?.length || 0) - 1; i >= 0; i--) {
-                    const input = node.inputs[i];
-                    if (input?.name?.startsWith("image_") && !desiredNames.has(input.name)) {
-                        node.removeInput(i);
-                    }
-                }
-
-                // 按顺序补齐缺失的输入端口。
-                const existingNames = new Set((node.inputs || []).map(input => input.name));
-                for (let i = 2; i <= maxInputs; i++) {
-                    const name = `image_${i}`;
-                    if (!existingNames.has(name)) {
-                        node.addInput(name, "IMAGE");
-                    }
-                }
-
-                // 确保 image_* 输入按编号排序，避免按钮刷新后顺序错乱。
-                if (node.inputs && node.inputs.length > 1) {
-                    const first = node.inputs[0];
-                    const rest = node.inputs.slice(1).sort((a, b) => {
-                        const aNum = parseInt(String(a.name).split("_")[1] || "999", 10);
-                        const bNum = parseInt(String(b.name).split("_")[1] || "999", 10);
-                        return aNum - bNum;
+            const applyStitchInputCount = node => {
+                const countWidget = node.widgets?.find(w => w.name === "input_count");
+                if (countWidget) {
+                    syncImageInputs(node, countWidget, {
+                        max: 16,
+                        prefix: "image_",
+                        type: "IMAGE",
                     });
-                    node.inputs = [first, ...rest];
                 }
-
-                if (node.setSize && node.computeSize) {
-                    try { node.setSize(node.computeSize()); } catch (e) {}
-                }
-                if (node.setDirtyCanvas) node.setDirtyCanvas(true, true);
-                if (app.graph?.setDirtyCanvas) app.graph.setDirtyCanvas(true, true);
-            }
+            };
 
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 if (onNodeCreated) onNodeCreated.apply(this, arguments);
 
                 try {
-                    const node = this;
-                    const countWidget = node.widgets?.find(w => w.name === "input_count");
-                    if (!countWidget) return;
-
-                    const refreshInputs = () => applyStitchInputCount(node, countWidget.value);
-
-                    const origCallback = countWidget.callback;
-                    countWidget.callback = function () {
-                        refreshInputs();
-                        if (origCallback) return origCallback.apply(this, arguments);
-                    };
-
-                    setTimeout(refreshInputs, 50);
+                    wireCountWidget(this, "input_count", () => applyStitchInputCount(this));
                 } catch (e) {
                     console.error("Wudd ImageStitch Error:", e);
                 }
@@ -345,10 +339,7 @@ app.registerExtension({
             const onConfigure = nodeType.prototype.onConfigure;
             nodeType.prototype.onConfigure = function (config) {
                 if (onConfigure) onConfigure.apply(this, arguments);
-                try {
-                    const countWidget = this.widgets?.find(w => w.name === "input_count");
-                    if (countWidget) applyStitchInputCount(this, countWidget.value);
-                } catch (e) {}
+                try { applyStitchInputCount(this); } catch (e) {}
             };
         }
     }
