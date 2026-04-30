@@ -30,6 +30,7 @@ NODE_CLASS_MAPPINGS = {
     "WuddTextSplitter": WuddTextSplitter,
     "WuddMultiTextSplitter": WuddMultiTextSplitter,
     "WuddDropAlpha": WuddDropAlpha,
+    "WuddImageExpand": WuddImageExpand,
     "WuddEdgePad": WuddEdgePad,
     "WuddImageListImporter": WuddImageListImporter,
     "WuddImageStitch": WuddImageStitch,
