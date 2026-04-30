@@ -12,6 +12,7 @@ ComfyUI-Wudd — 节点注册入口。
 from .nodes_image import (
     WuddMultiSaveImage,
     WuddDropAlpha,
+    WuddImageExpand,
     WuddEdgePad,
     WuddImageListImporter,
     WuddImageStitch,
