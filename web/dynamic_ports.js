@@ -271,6 +271,9 @@ app.registerExtension({
                     firstIndex: 1,
                 });
 
+                const modeWidget = node.widgets?.find(w => w.name === "mode");
+                const isFolder = modeWidget?.value === "folder";
+
                 const count = clampInt(countWidget.value, 1, 50);
                 let changed = false;
                 for (let i = 0; i < (node.widgets?.length || 0); i++) {
@@ -278,7 +281,8 @@ app.registerExtension({
                     const idx = indexedSlotNumber(widget?.name, "image_");
                     if (idx == null) continue;
 
-                    const visible = idx <= count;
+                    // folder 模式下隐藏全部 image_X 选择框；files 模式按 count 显隐
+                    const visible = !isFolder && idx <= count;
                     changed = setWidgetVisible(widget, visible) || changed;
 
                     const maybeButton = node.widgets[i + 1];
@@ -290,6 +294,12 @@ app.registerExtension({
                     }
                 }
 
+                // folder_path 仅在 folder 模式可见
+                const folderPathWidget = node.widgets?.find(w => w.name === "folder_path");
+                if (folderPathWidget) {
+                    changed = setWidgetVisible(folderPathWidget, isFolder) || changed;
+                }
+
                 if (changed) refreshNode(node);
             }
 
@@ -298,6 +308,15 @@ app.registerExtension({
                 if (onNodeCreated) onNodeCreated.apply(this, arguments);
                 try {
                     wireCountWidget(this, "image_count", () => applyImageCount(this));
+                    // mode 切换时也要刷新可见性
+                    const modeWidget = this.widgets?.find(w => w.name === "mode");
+                    if (modeWidget) {
+                        const origCallback = modeWidget.callback;
+                        modeWidget.callback = function () {
+                            applyImageCount(this);
+                            if (origCallback) return origCallback.apply(this, arguments);
+                        }.bind(this);
+                    }
                 } catch (e) {
                     console.error("Wudd ImageListImporter Error:", e);
                 }
