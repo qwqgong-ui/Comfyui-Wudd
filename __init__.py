@@ -43,6 +43,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WuddTextSplitter": "Wudd Text Splitter",
     "WuddMultiTextSplitter": "Wudd Multi Text Splitter",
     "WuddDropAlpha": "Wudd Drop Alpha",
+    "WuddImageExpand": "Wudd Image Expand",
     "WuddEdgePad": "Wudd Edge Pad",
     "WuddImageListImporter": "Wudd Image List Importer",
     "WuddImageStitch": "Wudd Image Stitch",
