@@ -309,13 +309,14 @@ app.registerExtension({
                 try {
                     wireCountWidget(this, "image_count", () => applyImageCount(this));
                     // mode 切换时也要刷新可见性
-                    const modeWidget = this.widgets?.find(w => w.name === "mode");
+                    const node = this;
+                    const modeWidget = node.widgets?.find(w => w.name === "mode");
                     if (modeWidget) {
                         const origCallback = modeWidget.callback;
                         modeWidget.callback = function () {
-                            applyImageCount(this);
+                            applyImageCount(node);
                             if (origCallback) return origCallback.apply(this, arguments);
-                        }.bind(this);
+                        };
                     }
                 } catch (e) {
                     console.error("Wudd ImageListImporter Error:", e);
