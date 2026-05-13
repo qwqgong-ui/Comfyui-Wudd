@@ -35,14 +35,15 @@ Restart ComfyUI after installation.
 - `av`
 - `imageio-ffmpeg`
 
-`imageio-ffmpeg` provides an internal ffmpeg executable for the video-audio replacement node. The node resolves ffmpeg automatically and does not require a path widget. If you need an offline/local override, place `ffmpeg.exe` at one of these paths inside this repository:
+`imageio-ffmpeg` provides an internal ffmpeg executable for the video-audio replacement node. The node resolves ffmpeg automatically and does not require a path widget.
 
-- `ffmpeg/bin/ffmpeg.exe`
-- `ffmpeg/ffmpeg.exe`
+If you need an offline/local override, place the Windows ffmpeg executables in this repository's `bin/` folder:
+
 - `bin/ffmpeg.exe`
-- `ffmpeg.exe`
+- `bin/ffprobe.exe`
+- `bin/ffplay.exe`
 
-If none of those exist, the node falls back to `ffmpeg` on `PATH`.
+The node uses `bin/ffmpeg.exe` only when all three files exist. The `bin/` folder is kept in Git with `.gitkeep`, while copied executables are ignored by `.gitignore` and should not be committed. If the local `bin/` set is missing or incomplete, the node falls back to `imageio-ffmpeg`, then to `ffmpeg` on `PATH`.
 
 ## Nodes
 
@@ -163,7 +164,7 @@ Replace a `VIDEO` input's audio track with a supplied `AUDIO` input.
 
 - Video stream is copied with ffmpeg where possible.
 - New audio is encoded as AAC.
-- ffmpeg is resolved internally from `imageio-ffmpeg`, a local node copy, or system `PATH`.
+- ffmpeg is resolved internally from a complete local `bin/` set, `imageio-ffmpeg`, or system `PATH`.
 - Outputs a new `VIDEO` object that can be passed to ComfyUI's built-in `Save Video`.
 
 Inputs:

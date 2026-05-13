@@ -17,16 +17,23 @@ from .nodes_common import WUDD_CATEGORY, CREATE_NO_WINDOW
 
 
 NODE_DIR = os.path.dirname(__file__)
-LOCAL_FFMPEG_CANDIDATES = (
-    os.path.join(NODE_DIR, "ffmpeg", "bin", "ffmpeg.exe"),
-    os.path.join(NODE_DIR, "ffmpeg", "ffmpeg.exe"),
-    os.path.join(NODE_DIR, "bin", "ffmpeg.exe"),
-    os.path.join(NODE_DIR, "ffmpeg.exe"),
+LOCAL_BIN_DIR = os.path.join(NODE_DIR, "bin")
+LOCAL_BIN_REQUIRED_EXES = (
+    "ffmpeg.exe",
+    "ffprobe.exe",
+    "ffplay.exe",
 )
 
 
 def resolve_ffmpeg_exe():
     """Resolve an ffmpeg binary without exposing path configuration in the node UI."""
+    local_bin_paths = [
+        os.path.join(LOCAL_BIN_DIR, name)
+        for name in LOCAL_BIN_REQUIRED_EXES
+    ]
+    if all(os.path.isfile(path) for path in local_bin_paths):
+        return os.path.join(LOCAL_BIN_DIR, "ffmpeg.exe")
+
     try:
         import imageio_ffmpeg
         exe = imageio_ffmpeg.get_ffmpeg_exe()
@@ -35,17 +42,14 @@ def resolve_ffmpeg_exe():
     except Exception:
         pass
 
-    for candidate in LOCAL_FFMPEG_CANDIDATES:
-        if os.path.isfile(candidate):
-            return candidate
-
     exe = shutil.which("ffmpeg")
     if exe:
         return exe
 
     raise FileNotFoundError(
         "ffmpeg executable not found. Install this custom node's requirements "
-        "with ComfyUI Python, or place ffmpeg.exe under ComfyUI-Wudd/ffmpeg/bin/."
+        "with ComfyUI Python, or place ffmpeg.exe, ffprobe.exe, and ffplay.exe "
+        "under ComfyUI-Wudd/bin/."
     )
 
 
