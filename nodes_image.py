@@ -14,6 +14,7 @@ import re
 import sys
 import json
 import uuid
+import shutil
 import subprocess
 import numpy as np
 from PIL import Image
@@ -67,6 +68,27 @@ class WuddMultiSaveImage:
     CATEGORY = WUDD_CATEGORY
 
     # ---------- helpers ----------
+
+    @staticmethod
+    def _cache_dir():
+        cache_dir = os.path.join(
+            folder_paths.get_temp_directory(),
+            "image",
+            "wudd_save_cache",
+        )
+        os.makedirs(cache_dir, exist_ok=True)
+        return cache_dir
+
+    @staticmethod
+    def _safe_cache_stem(name):
+        stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(name or "image")).strip("._")
+        return stem or "image"
+
+    @classmethod
+    def _backup_path(cls, file_name):
+        stem, ext = os.path.splitext(os.path.basename(file_name))
+        safe_stem = cls._safe_cache_stem(stem)
+        return os.path.join(cls._cache_dir(), f"{safe_stem}_{uuid.uuid4().hex}{ext}")
 
     @staticmethod
     def _find_next_run(folder, filename, ext):
@@ -165,6 +187,31 @@ class WuddMultiSaveImage:
             self._save_jpegli(img_pil, file_path, folder,
                               quality, progressive, enable_xyb, chroma_subsampling)
 
+    def _save_with_backup(self, img_pil, file_path, file_name, extension,
+                          png_metadata, quality, progressive, enable_xyb,
+                          chroma_subsampling):
+        backup_path = self._backup_path(file_name)
+        backup_folder = os.path.dirname(backup_path)
+        backup_stem, backup_ext = os.path.splitext(os.path.basename(backup_path))
+        staging_path = os.path.join(
+            backup_folder,
+            f".{backup_stem}.staging_{uuid.uuid4().hex}{backup_ext}",
+        )
+        try:
+            self._do_save(img_pil, staging_path, extension, png_metadata,
+                          backup_folder, quality, progressive, enable_xyb,
+                          chroma_subsampling)
+            os.replace(staging_path, backup_path)
+        finally:
+            try:
+                if os.path.exists(staging_path):
+                    os.remove(staging_path)
+            except OSError:
+                pass
+
+        shutil.copy2(backup_path, file_path)
+        return backup_path
+
     # ---------- main entry ----------
 
     def save_images(self, image_1, filename_prefix="Wudd_Img", save_mode="append",
@@ -218,9 +265,9 @@ class WuddMultiSaveImage:
                         file_name = f"{filename}.{run:05}.{seq:02}.{ext}"
 
                 file_path = os.path.join(full_output_folder, file_name)
-                self._do_save(img_pil, file_path, extension, png_metadata,
-                              full_output_folder, quality, progressive,
-                              enable_xyb, chroma_subsampling)
+                self._save_with_backup(img_pil, file_path, file_name, extension,
+                                       png_metadata, quality, progressive,
+                                       enable_xyb, chroma_subsampling)
 
                 results.append({
                     "filename": file_name,

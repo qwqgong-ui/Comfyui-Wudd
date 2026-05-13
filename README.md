@@ -58,6 +58,7 @@ Batch save one or more `IMAGE` inputs.
 - Supports append and overwrite naming modes.
 - Preserves ComfyUI workflow metadata in PNG output.
 - Jpegli uses the bundled `jxl-x64-windows-static/bin/cjpegli.exe` on Windows and falls back to PIL JPEG if unavailable.
+- Saved images are backed up in `temp/image/wudd_save_cache` before copying to the final output path.
 
 Inputs:
 
@@ -101,6 +102,7 @@ Concatenate `VIDEO` inputs in port order and output a new `VIDEO`.
 - Uses FFV1 video and PCM float audio in MKV for lossless internal processing.
 - `fit_to_first` keeps aspect ratio with padding; `stretch_to_first` fills the first video's size.
 - Audio can be kept with PCM normalization and silence for mute clips, or removed.
+- Normalized segments and outputs are backed up in `temp/video/wudd_concat_cache`.
 - The output stays in ComfyUI temp storage and can be connected to `Wudd Save Video`.
 
 Inputs:

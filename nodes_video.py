@@ -7,6 +7,7 @@ Contains:
 """
 
 from fractions import Fraction
+import hashlib
 import json
 import os
 import re
@@ -399,6 +400,8 @@ class WuddSaveVideo:
 
 
 class WuddConcatVideos:
+    CACHE_VERSION = "v1"
+
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -414,6 +417,58 @@ class WuddConcatVideos:
     RETURN_NAMES = ("video",)
     FUNCTION = "concat_videos"
     CATEGORY = WUDD_CATEGORY
+
+    @staticmethod
+    def _cache_dir():
+        cache_dir = os.path.join(
+            folder_paths.get_temp_directory(),
+            "video",
+            "wudd_concat_cache",
+        )
+        os.makedirs(cache_dir, exist_ok=True)
+        return cache_dir
+
+    @classmethod
+    def _cache_path(cls, stem, suffix):
+        return os.path.join(cls._cache_dir(), f"{stem}_{uuid.uuid4().hex}{suffix}")
+
+    @staticmethod
+    def _file_signature(path):
+        stat = os.stat(path)
+        return {
+            "path": os.path.abspath(path),
+            "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+        }
+
+    @classmethod
+    def _segment_cache_path(cls, input_path, index, width, height, fps,
+                            resize_mode, audio_mode, pix_fmt,
+                            audio_sample_rate, audio_channels, audio_layout):
+        payload = {
+            "version": cls.CACHE_VERSION,
+            "input": cls._file_signature(input_path),
+            "index": index,
+            "width": width,
+            "height": height,
+            "fps": fps,
+            "resize_mode": resize_mode,
+            "audio_mode": audio_mode,
+            "pix_fmt": pix_fmt,
+            "audio_sample_rate": audio_sample_rate,
+            "audio_channels": audio_channels,
+            "audio_layout": audio_layout,
+        }
+        data = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        digest = hashlib.sha256(data).hexdigest()[:24]
+        return os.path.join(cls._cache_dir(), f"segment_{index:02}_{digest}.mkv")
+
+    @staticmethod
+    def _usable_cache(path):
+        try:
+            return os.path.exists(path) and os.path.getsize(path) > 0
+        except OSError:
+            return False
 
     @staticmethod
     def _fps_string(video):
@@ -592,6 +647,51 @@ class WuddConcatVideos:
             ) from e
 
     @classmethod
+    def _normalize_segment_cached(cls, ffmpeg, input_path, index, width, height, fps,
+                                  resize_mode, audio_mode, pix_fmt,
+                                  audio_sample_rate, audio_channels, audio_layout):
+        cache_path = cls._segment_cache_path(
+            input_path,
+            index,
+            width,
+            height,
+            fps,
+            resize_mode,
+            audio_mode,
+            pix_fmt,
+            audio_sample_rate,
+            audio_channels,
+            audio_layout,
+        )
+        if cls._usable_cache(cache_path):
+            return cache_path
+
+        staging_path = cls._cache_path(f"segment_{index:02}_staging", ".mkv")
+        try:
+            cls._normalize_segment(
+                ffmpeg,
+                input_path,
+                staging_path,
+                width,
+                height,
+                fps,
+                resize_mode,
+                audio_mode,
+                pix_fmt,
+                audio_sample_rate,
+                audio_channels,
+                audio_layout,
+            )
+            os.replace(staging_path, cache_path)
+            return cache_path
+        finally:
+            try:
+                if os.path.exists(staging_path):
+                    os.remove(staging_path)
+            except OSError:
+                pass
+
+    @classmethod
     def _concat_segments(cls, ffmpeg, segment_paths, output_path):
         list_path = WuddSaveVideo._temp_path(".txt")
         try:
@@ -643,31 +743,30 @@ class WuddConcatVideos:
         height = self._even_dimension(height)
         fps = self._fps_string(videos[0])
 
-        output_path = WuddSaveVideo._temp_path(".mkv")
+        output_path = self._cache_path("concat_output", ".mkv")
         cleanup_paths = []
         segment_paths = []
 
         try:
-            input_paths = []
-            for video in videos:
+            pix_fmt = None
+            audio_sample_rate = None
+            audio_channels = None
+            audio_layout = None
+
+            for index, video in enumerate(videos, start=1):
                 input_path, temp_input = WuddSaveVideo._materialize_video_source(video)
                 if temp_input:
                     cleanup_paths.append(temp_input)
-                input_paths.append(input_path)
 
-            pix_fmt = self._probe_video_pix_fmt(input_paths[0])
-            audio_sample_rate, audio_channels, audio_layout = \
-                self._probe_audio_settings(input_paths[0])
+                if index == 1:
+                    pix_fmt = self._probe_video_pix_fmt(input_path)
+                    audio_sample_rate, audio_channels, audio_layout = \
+                        self._probe_audio_settings(input_path)
 
-            for index, input_path in enumerate(input_paths, start=1):
-                segment_path = WuddSaveVideo._temp_path(f".concat_{index:02}.mkv")
-                cleanup_paths.append(segment_path)
-                segment_paths.append(segment_path)
-
-                self._normalize_segment(
+                segment_path = self._normalize_segment_cached(
                     ffmpeg,
                     input_path,
-                    segment_path,
+                    index,
                     width,
                     height,
                     fps,
@@ -678,6 +777,7 @@ class WuddConcatVideos:
                     audio_channels,
                     audio_layout,
                 )
+                segment_paths.append(segment_path)
 
             self._concat_segments(ffmpeg, segment_paths, output_path)
             return (InputImpl.VideoFromFile(output_path),)
