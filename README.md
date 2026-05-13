@@ -77,7 +77,7 @@ Save one or more `VIDEO` inputs to the ComfyUI output directory.
 - Dynamic video input ports.
 - Encodes video as AV1 or H.265/HEVC through ffmpeg.
 - Supports append and overwrite naming modes matching `Wudd Multi Save`.
-- Audio can be copied, re-encoded to AAC, or removed.
+- Audio can be copied, re-encoded to AAC with the source sample rate/channels, or removed.
 - ffmpeg is resolved internally from a complete local `bin/` set, `imageio-ffmpeg`, or system `PATH`.
 
 Inputs:
@@ -90,7 +90,6 @@ Inputs:
 - `crf`
 - `preset`: `fast`, `medium`, `slow`
 - `audio_mode`: `copy`, `aac`, `none`
-- `audio_bitrate`: `128k`, `192k`, `256k`, `320k`
 
 ### Wudd Concat Videos
 

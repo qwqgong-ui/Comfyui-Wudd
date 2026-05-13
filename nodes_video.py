@@ -55,7 +55,6 @@ class WuddSaveVideo:
                 "crf": ("INT", {"default": 28, "min": 0, "max": 51, "step": 1}),
                 "preset": (["fast", "medium", "slow"], {"default": "medium"}),
                 "audio_mode": (["copy", "aac", "none"], {"default": "copy"}),
-                "audio_bitrate": (["128k", "192k", "256k", "320k"], {"default": "192k"}),
             },
             "optional": {
                 "filename_prefix": ("STRING", {"default": "Wudd_Video"}),
@@ -208,7 +207,7 @@ class WuddSaveVideo:
         return args
 
     @staticmethod
-    def _first_audio_codec(path):
+    def _first_audio_info(path):
         try:
             import av
             with av.open(path, mode="r") as container:
@@ -218,16 +217,29 @@ class WuddSaveVideo:
                 )
                 if audio_stream is None:
                     return None
-                return audio_stream.codec_context.name
+                codec_context = audio_stream.codec_context
+                sample_rate = codec_context.sample_rate
+                channels = codec_context.channels
+                bit_rate = getattr(codec_context, "bit_rate", None)
+                if not bit_rate:
+                    bit_rate = getattr(audio_stream, "bit_rate", None)
+                return {
+                    "codec": codec_context.name,
+                    "sample_rate": int(sample_rate) if sample_rate else None,
+                    "channels": int(channels) if channels else None,
+                    "bit_rate": int(bit_rate) if bit_rate else None,
+                }
         except Exception:
             return None
 
     @classmethod
-    def _effective_audio_mode(cls, input_video, container, audio_mode):
+    def _effective_audio_mode(cls, input_video, container, audio_mode, audio_info=None):
         if audio_mode != "copy" or container != "mp4":
             return audio_mode
 
-        codec = cls._first_audio_codec(input_video)
+        if audio_info is None:
+            audio_info = cls._first_audio_info(input_video)
+        codec = audio_info["codec"] if audio_info else None
         if codec is None or codec in {"aac", "mp3", "alac"}:
             return audio_mode
 
@@ -237,11 +249,29 @@ class WuddSaveVideo:
         )
         return "aac"
 
+    @staticmethod
+    def _aac_audio_args(audio_info):
+        args = ["-c:a", "aac"]
+        if audio_info:
+            sample_rate = audio_info.get("sample_rate")
+            channels = audio_info.get("channels")
+            if sample_rate:
+                args.extend(["-ar", str(sample_rate)])
+            if channels:
+                args.extend(["-ac", str(channels)])
+        return args
+
     @classmethod
     def _run_ffmpeg(cls, input_video, output_path, codec, container, crf, preset,
-                    audio_mode, audio_bitrate, metadata_args):
+                    audio_mode, metadata_args):
         ffmpeg = resolve_ffmpeg_exe()
-        audio_mode = cls._effective_audio_mode(input_video, container, audio_mode)
+        audio_info = cls._first_audio_info(input_video)
+        audio_mode = cls._effective_audio_mode(
+            input_video,
+            container,
+            audio_mode,
+            audio_info,
+        )
 
         cmd = [
             ffmpeg,
@@ -260,7 +290,7 @@ class WuddSaveVideo:
         if audio_mode == "copy":
             cmd.extend(["-c:a", "copy"])
         elif audio_mode == "aac":
-            cmd.extend(["-c:a", "aac", "-b:a", audio_bitrate])
+            cmd.extend(cls._aac_audio_args(audio_info))
         else:
             cmd.append("-an")
 
@@ -302,7 +332,7 @@ class WuddSaveVideo:
 
     def save_videos(self, video_1, filename_prefix="Wudd_Video", save_mode="append",
                     codec="av1", container="mp4", crf=28, preset="medium",
-                    audio_mode="copy", audio_bitrate="192k", prompt=None,
+                    audio_mode="copy", audio_bitrate=None, prompt=None,
                     extra_pnginfo=None, **kwargs):
         videos = _collect_video_inputs(video_1, kwargs)
         if not videos:
@@ -349,7 +379,6 @@ class WuddSaveVideo:
                     crf,
                     preset,
                     audio_mode,
-                    audio_bitrate,
                     metadata_args,
                 )
             finally:

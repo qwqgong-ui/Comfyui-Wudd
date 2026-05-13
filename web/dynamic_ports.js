@@ -291,37 +291,6 @@ app.registerExtension({
                 });
             };
 
-            const onNodeCreated = nodeType.prototype.onNodeCreated;
-            nodeType.prototype.onNodeCreated = function () {
-                if (onNodeCreated) onNodeCreated.apply(this, arguments);
-
-                try {
-                    const audioModeWidget = this.widgets?.find(w => w.name === "audio_mode");
-                    const refresh = () => {
-                        const showAudioBitrate = nodeData.name === "WuddSaveVideo"
-                            ? audioModeWidget?.value === "aac"
-                            : audioModeWidget?.value === "keep";
-                        let changed = false;
-                        for (const widget of this.widgets || []) {
-                            if (widget.name === "audio_bitrate") {
-                                changed = setWidgetVisible(widget, showAudioBitrate) || changed;
-                            }
-                        }
-                        if (changed) refreshNode(this, true);
-                    };
-
-                    if (audioModeWidget) {
-                        const origCallback = audioModeWidget.callback;
-                        audioModeWidget.callback = function () {
-                            refresh();
-                            if (origCallback) return origCallback.apply(this, arguments);
-                        };
-                        setTimeout(refresh, 50);
-                    }
-                } catch (e) {
-                    console.error("Wudd Video Widget Error:", e);
-                }
-            };
         }
 
         // ==========================================
