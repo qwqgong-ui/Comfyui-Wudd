@@ -35,7 +35,7 @@ Restart ComfyUI after installation.
 - `av`
 - `imageio-ffmpeg`
 
-`imageio-ffmpeg` provides an internal ffmpeg executable for the video-audio replacement node. The node resolves ffmpeg automatically and does not require a path widget.
+`imageio-ffmpeg` provides an internal ffmpeg executable for the video and audio-video nodes. The nodes resolve ffmpeg automatically and do not require a path widget.
 
 If you need an offline/local override, place the Windows ffmpeg executables in this repository's `bin/` folder:
 
@@ -69,6 +69,46 @@ Inputs:
 - `progressive`
 - `enable_xyb`
 - `chroma_subsampling`
+
+### Wudd Save Video
+
+Save one or more `VIDEO` inputs to the ComfyUI output directory.
+
+- Dynamic video input ports.
+- Encodes video as AV1 or H.265/HEVC through ffmpeg.
+- Supports append and overwrite naming modes matching `Wudd Multi Save`.
+- Audio can be copied, re-encoded to AAC, or removed.
+- ffmpeg is resolved internally from a complete local `bin/` set, `imageio-ffmpeg`, or system `PATH`.
+
+Inputs:
+
+- `video_1`, dynamic extra video inputs
+- `filename_prefix`
+- `save_mode`: `append`, `overwrite`
+- `codec`: `av1`, `h265`
+- `container`: `mp4`, `mkv`
+- `crf`
+- `preset`: `fast`, `medium`, `slow`
+- `audio_mode`: `copy`, `aac`, `none`
+- `audio_bitrate`: `128k`, `192k`, `256k`, `320k`
+
+### Wudd Concat Videos
+
+Concatenate `VIDEO` inputs in port order and output a new `VIDEO`.
+
+- Dynamic video input ports.
+- Concatenates as `video_1`, `video_2`, `video_3`, and so on.
+- Normalizes every segment to the first video's dimensions and frame rate before concatenating.
+- Uses FFV1 video and PCM float audio in MKV for lossless internal processing.
+- `fit_to_first` keeps aspect ratio with padding; `stretch_to_first` fills the first video's size.
+- Audio can be kept with PCM normalization and silence for mute clips, or removed.
+- The output stays in ComfyUI temp storage and can be connected to `Wudd Save Video`.
+
+Inputs:
+
+- `video_1`, `video_2`, dynamic extra video inputs
+- `resize_mode`: `fit_to_first`, `stretch_to_first`
+- `audio_mode`: `keep`, `none`
 
 ### Wudd Drop Alpha
 
@@ -209,5 +249,7 @@ Outputs:
 
 - PNG image saves include metadata for workflow restoration.
 - Jpegli is Windows-bundled in this repository; other platforms fall back to PIL JPEG.
+- AV1/H.265 video preview support depends on the browser and operating system codec support.
+- Video concatenation normalizes intermediate segments as FFV1/PCM in MKV for lossless internal processing, then downstream save nodes can encode final AV1/H.265 outputs.
 - Video audio replacement keeps the output video in ComfyUI's temp directory until it is consumed by downstream nodes.
 - ComfyUI itself provides `torch`, `folder_paths`, and the `VIDEO` object model used by these nodes.

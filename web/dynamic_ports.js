@@ -223,6 +223,108 @@ app.registerExtension({
         }
 
         // ==========================================
+        // Wudd video nodes — 动态输入端口
+        // ==========================================
+        if (nodeData.name === "WuddSaveVideo" || nodeData.name === "WuddConcatVideos") {
+
+            const onConnectionsChange = nodeType.prototype.onConnectionsChange;
+            nodeType.prototype.onConnectionsChange = function (type, index, connected, link_info) {
+                if (onConnectionsChange) onConnectionsChange.apply(this, arguments);
+
+                if (this.__isUpdatingPorts) return;
+                this.__isUpdatingPorts = true;
+
+                if (type === INPUT && this.inputs && this.inputs.length > 0) {
+                    try {
+                        let videoInputs = (this.inputs || [])
+                            .map((input, idx) => ({ input, idx }))
+                            .filter(item => indexedSlotNumber(item.input?.name, "video_") != null)
+                            .sort((a, b) => indexedSlotNumber(a.input.name, "video_") - indexedSlotNumber(b.input.name, "video_"));
+
+                        while (videoInputs.length > 1 &&
+                               !slotHasLink(videoInputs[videoInputs.length - 1].input) &&
+                               !slotHasLink(videoInputs[videoInputs.length - 2].input)) {
+                            const removed = videoInputs.pop();
+                            this.removeInput(removed.idx);
+                            videoInputs = (this.inputs || [])
+                                .map((input, idx) => ({ input, idx }))
+                                .filter(item => indexedSlotNumber(item.input?.name, "video_") != null)
+                                .sort((a, b) => indexedSlotNumber(a.input.name, "video_") - indexedSlotNumber(b.input.name, "video_"));
+                        }
+
+                        const lastInput = videoInputs[videoInputs.length - 1]?.input;
+                        if (videoInputs.length > 0 && slotHasLink(lastInput)) {
+                            const nextIndex = Math.max(...videoInputs.map(item => indexedSlotNumber(item.input.name, "video_"))) + 1;
+                            const nextName = `video_${nextIndex}`;
+                            if (!(this.inputs || []).some(input => input.name === nextName)) {
+                                this.addInput(nextName, "VIDEO");
+                            }
+                        }
+                    } catch (e) {
+                        console.error("Wudd Video Ports Error:", e);
+                    }
+                }
+
+                this.__isUpdatingPorts = false;
+            };
+
+            const COMBO_DEFAULTS = nodeData.name === "WuddSaveVideo" ? {
+                save_mode:  { valid: ["append", "overwrite"], def: "append" },
+                codec:      { valid: ["av1", "h265"],         def: "av1"    },
+                container:  { valid: ["mp4", "mkv"],          def: "mp4"    },
+                preset:     { valid: ["fast", "medium", "slow"], def: "medium" },
+                audio_mode: { valid: ["copy", "aac", "none"], def: "copy"  },
+            } : {
+                resize_mode: { valid: ["fit_to_first", "stretch_to_first"], def: "fit_to_first" },
+                audio_mode:  { valid: ["keep", "none"], def: "keep" },
+            };
+            const onConfigure = nodeType.prototype.onConfigure;
+            nodeType.prototype.onConfigure = function (config) {
+                if (onConfigure) onConfigure.apply(this, arguments);
+                if (!this.widgets) return;
+                this.widgets.forEach(w => {
+                    const spec = COMBO_DEFAULTS[w.name];
+                    if (spec && !spec.valid.includes(w.value)) {
+                        console.warn(`[Wudd] widget "${w.name}" had invalid value "${w.value}", reset to "${spec.def}"`);
+                        w.value = spec.def;
+                    }
+                });
+            };
+
+            const onNodeCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                if (onNodeCreated) onNodeCreated.apply(this, arguments);
+
+                try {
+                    const audioModeWidget = this.widgets?.find(w => w.name === "audio_mode");
+                    const refresh = () => {
+                        const showAudioBitrate = nodeData.name === "WuddSaveVideo"
+                            ? audioModeWidget?.value === "aac"
+                            : audioModeWidget?.value === "keep";
+                        let changed = false;
+                        for (const widget of this.widgets || []) {
+                            if (widget.name === "audio_bitrate") {
+                                changed = setWidgetVisible(widget, showAudioBitrate) || changed;
+                            }
+                        }
+                        if (changed) refreshNode(this, true);
+                    };
+
+                    if (audioModeWidget) {
+                        const origCallback = audioModeWidget.callback;
+                        audioModeWidget.callback = function () {
+                            refresh();
+                            if (origCallback) return origCallback.apply(this, arguments);
+                        };
+                        setTimeout(refresh, 50);
+                    }
+                } catch (e) {
+                    console.error("Wudd Video Widget Error:", e);
+                }
+            };
+        }
+
+        // ==========================================
         // WuddMultiTextSplitter — 动态输出端口
         // ==========================================
         if (nodeData.name === "WuddMultiTextSplitter") {

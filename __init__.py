@@ -6,6 +6,7 @@ ComfyUI-Wudd — 节点注册入口。
     nodes_image.py   图像类节点（Save / DropAlpha / EdgePad / ListImporter / Stitch）
     nodes_text.py    文本类节点（TextSplitter / MultiTextSplitter / PathJoiner）
     nodes_audio.py   音频类节点（VideoAudioExtractor / ReplaceVideoAudio）
+    nodes_video.py   视频类节点（SaveVideo / ConcatVideos）
     nodes_api.py     外部 API 节点（OpenAIGPT54）
 前端动态端口脚本位于 ./web/dynamic_ports.js，由 WEB_DIRECTORY 告知 ComfyUI 加载。
 """
@@ -24,11 +25,14 @@ from .nodes_text import (
     WuddPathJoiner,
 )
 from .nodes_audio import WuddVideoAudioExtractor, WuddReplaceVideoAudio
+from .nodes_video import WuddSaveVideo, WuddConcatVideos
 from .nodes_api import WuddOpenAIGPT54
 
 
 NODE_CLASS_MAPPINGS = {
     "WuddMultiSaveImage": WuddMultiSaveImage,
+    "WuddSaveVideo": WuddSaveVideo,
+    "WuddConcatVideos": WuddConcatVideos,
     "WuddTextSplitter": WuddTextSplitter,
     "WuddMultiTextSplitter": WuddMultiTextSplitter,
     "WuddDropAlpha": WuddDropAlpha,
@@ -44,6 +48,8 @@ NODE_CLASS_MAPPINGS = {
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "WuddMultiSaveImage": "Wudd Multi Save",
+    "WuddSaveVideo": "Wudd Save Video",
+    "WuddConcatVideos": "Wudd Concat Videos",
     "WuddTextSplitter": "Wudd Text Splitter",
     "WuddMultiTextSplitter": "Wudd Multi Text Splitter",
     "WuddDropAlpha": "Wudd Drop Alpha",
