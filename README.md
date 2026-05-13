@@ -77,6 +77,7 @@ Save one or more `VIDEO` inputs to the ComfyUI output directory.
 
 - Dynamic video input ports.
 - Encodes video as AV1 or H.265/HEVC through ffmpeg.
+- Supports CPU encoding plus NVIDIA NVENC, Intel Quick Sync, and AMD AMF when the resolved ffmpeg build and local hardware support the selected encoder.
 - Supports append and overwrite naming modes matching `Wudd Multi Save`.
 - Audio can be copied, re-encoded to AAC with the source sample rate/channels, or removed.
 - ffmpeg is resolved internally from a complete local `bin/` set, `imageio-ffmpeg`, or system `PATH`.
@@ -87,6 +88,7 @@ Inputs:
 - `filename_prefix`
 - `save_mode`: `append`, `overwrite`
 - `codec`: `av1`, `h265`
+- `encoder`: `cpu`, `nvidia`, `intel`, `amd`
 - `container`: `mp4`, `mkv`
 - `crf`
 - `preset`: `fast`, `medium`, `slow`

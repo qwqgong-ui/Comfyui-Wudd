@@ -271,6 +271,7 @@ app.registerExtension({
             const COMBO_DEFAULTS = nodeData.name === "WuddSaveVideo" ? {
                 save_mode:  { valid: ["append", "overwrite"], def: "append" },
                 codec:      { valid: ["av1", "h265"],         def: "av1"    },
+                encoder:    { valid: ["cpu", "nvidia", "intel", "amd"], def: "cpu" },
                 container:  { valid: ["mp4", "mkv"],          def: "mp4"    },
                 preset:     { valid: ["fast", "medium", "slow"], def: "medium" },
                 audio_mode: { valid: ["copy", "aac", "none"], def: "copy"  },

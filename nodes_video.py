@@ -52,6 +52,7 @@ class WuddSaveVideo:
                 "video_1": ("VIDEO",),
                 "save_mode": (["append", "overwrite"], {"default": "append"}),
                 "codec": (["av1", "h265"], {"default": "av1"}),
+                "encoder": (["cpu", "nvidia", "intel", "amd"], {"default": "cpu"}),
                 "container": (["mp4", "mkv"], {"default": "mp4"}),
                 "crf": ("INT", {"default": 28, "min": 0, "max": 51, "step": 1}),
                 "preset": (["fast", "medium", "slow"], {"default": "medium"}),
@@ -149,8 +150,57 @@ class WuddSaveVideo:
         )
 
     @classmethod
-    def _video_codec_args(cls, ffmpeg, codec, container, crf, preset):
+    def _video_codec_args(cls, ffmpeg, codec, encoder_mode, container, crf, preset):
         crf = max(0, min(int(crf), 51))
+        encoder_mode = encoder_mode or "cpu"
+
+        if encoder_mode != "cpu":
+            hardware_encoders = {
+                "nvidia": {"av1": "av1_nvenc", "h265": "hevc_nvenc"},
+                "intel": {"av1": "av1_qsv", "h265": "hevc_qsv"},
+                "amd": {"av1": "av1_amf", "h265": "hevc_amf"},
+            }
+            try:
+                encoder = hardware_encoders[encoder_mode][codec]
+            except KeyError as e:
+                raise ValueError(
+                    f"Unsupported video encoder mode: {encoder_mode!r}"
+                ) from e
+
+            cls._select_encoder(ffmpeg, (encoder,), f"{encoder_mode} {codec.upper()}")
+
+            if encoder_mode == "nvidia":
+                preset_map = {"fast": "p3", "medium": "p5", "slow": "p7"}
+                args = [
+                    "-c:v", encoder,
+                    "-preset", preset_map.get(preset, "p5"),
+                    "-rc", "vbr",
+                    "-cq", str(crf),
+                    "-b:v", "0",
+                    "-pix_fmt", "yuv420p",
+                ]
+            elif encoder_mode == "intel":
+                preset_map = {"fast": "fast", "medium": "medium", "slow": "slow"}
+                args = [
+                    "-c:v", encoder,
+                    "-preset", preset_map.get(preset, "medium"),
+                    "-global_quality", str(crf),
+                    "-pix_fmt", "nv12",
+                ]
+            else:
+                quality_map = {"fast": "speed", "medium": "balanced", "slow": "quality"}
+                args = [
+                    "-c:v", encoder,
+                    "-quality", quality_map.get(preset, "balanced"),
+                    "-rc", "cqp",
+                    "-qp_i", str(crf),
+                    "-qp_p", str(crf),
+                    "-pix_fmt", "yuv420p",
+                ]
+
+            if container == "mp4":
+                args.extend(["-tag:v", "hvc1" if codec == "h265" else "av01"])
+            return args
 
         if codec == "h265":
             encoder = cls._select_encoder(ffmpeg, ("libx265",), "H.265")
@@ -263,8 +313,8 @@ class WuddSaveVideo:
         return args
 
     @classmethod
-    def _run_ffmpeg(cls, input_video, output_path, codec, container, crf, preset,
-                    audio_mode, metadata_args):
+    def _run_ffmpeg(cls, input_video, output_path, codec, encoder_mode, container,
+                    crf, preset, audio_mode, metadata_args):
         ffmpeg = resolve_ffmpeg_exe()
         audio_info = cls._first_audio_info(input_video)
         audio_mode = cls._effective_audio_mode(
@@ -286,7 +336,14 @@ class WuddSaveVideo:
 
         cmd.extend(["-map_metadata", "0"])
         cmd.extend(metadata_args)
-        cmd.extend(cls._video_codec_args(ffmpeg, codec, container, crf, preset))
+        cmd.extend(cls._video_codec_args(
+            ffmpeg,
+            codec,
+            encoder_mode,
+            container,
+            crf,
+            preset,
+        ))
 
         if audio_mode == "copy":
             cmd.extend(["-c:a", "copy"])
@@ -332,9 +389,9 @@ class WuddSaveVideo:
         return True
 
     def save_videos(self, video_1, filename_prefix="Wudd_Video", save_mode="append",
-                    codec="av1", container="mp4", crf=28, preset="medium",
-                    audio_mode="copy", audio_bitrate=None, prompt=None,
-                    extra_pnginfo=None, **kwargs):
+                    codec="av1", encoder="cpu", container="mp4", crf=28,
+                    preset="medium", audio_mode="copy", audio_bitrate=None,
+                    prompt=None, extra_pnginfo=None, **kwargs):
         videos = _collect_video_inputs(video_1, kwargs)
         if not videos:
             return {"ui": {"images": [], "animated": (True,)}}
@@ -376,6 +433,7 @@ class WuddSaveVideo:
                     input_video,
                     output_path,
                     codec,
+                    encoder,
                     container,
                     crf,
                     preset,
