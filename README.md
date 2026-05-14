@@ -102,9 +102,10 @@ Concatenate `VIDEO` inputs in port order and output a new `VIDEO`.
 - Concatenates as `video_1`, `video_2`, `video_3`, and so on.
 - Normalizes every segment to the first video's dimensions and frame rate before concatenating.
 - Uses FFV1 video and PCM float audio in MKV for lossless internal processing.
+- Returns an MP4 video encoded for downstream nodes that require an MP4 container.
 - `fit_to_first` keeps aspect ratio with padding; `stretch_to_first` fills the first video's size.
 - Audio can be kept with PCM normalization and silence for mute clips, or removed.
-- Normalized segments and outputs are backed up in `temp/video/wudd_concat_cache`.
+- Normalized segments and MP4 outputs are backed up in `temp/video/wudd_concat_cache`.
 - The output stays in ComfyUI temp storage and can be connected to `Wudd Save Video`.
 
 Inputs:

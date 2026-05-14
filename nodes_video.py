@@ -750,6 +750,32 @@ class WuddConcatVideos:
                 pass
 
     @classmethod
+    def _mp4_video_args(cls, ffmpeg):
+        try:
+            encoder = WuddSaveVideo._select_encoder(
+                ffmpeg,
+                ("libx264",),
+                "H.264 MP4",
+            )
+            return [
+                "-c:v", encoder,
+                "-preset", "veryfast",
+                "-crf", "16",
+                "-pix_fmt", "yuv420p",
+            ]
+        except RuntimeError:
+            encoder = WuddSaveVideo._select_encoder(
+                ffmpeg,
+                ("mpeg4",),
+                "MP4 video",
+            )
+            return [
+                "-c:v", encoder,
+                "-q:v", "2",
+                "-pix_fmt", "yuv420p",
+            ]
+
+    @classmethod
     def _concat_segments(cls, ffmpeg, segment_paths, output_path):
         list_path = WuddSaveVideo._temp_path(".txt")
         try:
@@ -763,8 +789,13 @@ class WuddConcatVideos:
                 "-f", "concat",
                 "-safe", "0",
                 "-i", list_path,
-                "-c", "copy",
+                "-map", "0:v:0",
+                "-map", "0:a?",
+                *cls._mp4_video_args(ffmpeg),
+                "-c:a", "aac",
+                "-b:a", "320k",
                 "-movflags", "+faststart",
+                "-f", "mp4",
                 output_path,
             ]
             subprocess.run(
@@ -801,7 +832,7 @@ class WuddConcatVideos:
         height = self._even_dimension(height)
         fps = self._fps_string(videos[0])
 
-        output_path = self._cache_path("concat_output", ".mkv")
+        output_path = self._cache_path("concat_output", ".mp4")
         cleanup_paths = []
         segment_paths = []
 
