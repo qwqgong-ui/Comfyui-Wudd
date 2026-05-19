@@ -2,13 +2,15 @@
 ComfyUI-Wudd - video nodes.
 
 Contains:
-    WuddSaveVideo    Save one or more VIDEO inputs with AV1 or H.265 encoding
-    WuddConcatVideos Concatenate VIDEO inputs in input order
+    WuddSaveVideo        Save one or more VIDEO inputs with AV1 or H.265 encoding
+    WuddFastForwardVideo Speed up a VIDEO input by multiplier or target duration
+    WuddConcatVideos     Concatenate VIDEO inputs in input order
 """
 
 from fractions import Fraction
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -237,7 +239,7 @@ class WuddSaveVideo:
         return args
 
     @staticmethod
-    def _metadata_args(prompt, extra_pnginfo):
+    def _metadata_entries(prompt, extra_pnginfo):
         try:
             from comfy.cli_args import args as comfy_args
             if getattr(comfy_args, "disable_metadata", False):
@@ -252,10 +254,35 @@ class WuddSaveVideo:
             for key, value in extra_pnginfo.items():
                 metadata.append((str(key), json.dumps(value)))
 
-        args = []
-        for key, value in metadata:
-            args.extend(["-metadata", f"{key}={value}"])
-        return args
+        return metadata
+
+    @staticmethod
+    def _ffmetadata_escape(value):
+        return (
+            str(value)
+            .replace("\\", "\\\\")
+            .replace("\r\n", "\\n")
+            .replace("\r", "\\n")
+            .replace("\n", "\\n")
+            .replace("=", "\\=")
+            .replace(";", "\\;")
+            .replace("#", "\\#")
+        )
+
+    @classmethod
+    def _write_metadata_file(cls, metadata_entries):
+        if not metadata_entries:
+            return None
+
+        metadata_path = cls._temp_path(".ffmetadata")
+        with open(metadata_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(";FFMETADATA1\n")
+            for key, value in metadata_entries:
+                f.write(
+                    f"{cls._ffmetadata_escape(key)}="
+                    f"{cls._ffmetadata_escape(value)}\n"
+                )
+        return metadata_path
 
     @staticmethod
     def _first_audio_info(path):
@@ -314,7 +341,7 @@ class WuddSaveVideo:
 
     @classmethod
     def _run_ffmpeg(cls, input_video, output_path, codec, encoder_mode, container,
-                    crf, preset, audio_mode, metadata_args):
+                    crf, preset, audio_mode, metadata_entries):
         ffmpeg = resolve_ffmpeg_exe()
         audio_info = cls._first_audio_info(input_video)
         audio_mode = cls._effective_audio_mode(
@@ -324,40 +351,46 @@ class WuddSaveVideo:
             audio_info,
         )
 
-        cmd = [
-            ffmpeg,
-            "-y",
-            "-i", input_video,
-            "-map", "0:v:0",
-        ]
-
-        if audio_mode != "none":
-            cmd.extend(["-map", "0:a?"])
-
-        cmd.extend(["-map_metadata", "0"])
-        cmd.extend(metadata_args)
-        cmd.extend(cls._video_codec_args(
-            ffmpeg,
-            codec,
-            encoder_mode,
-            container,
-            crf,
-            preset,
-        ))
-
-        if audio_mode == "copy":
-            cmd.extend(["-c:a", "copy"])
-        elif audio_mode == "aac":
-            cmd.extend(cls._aac_audio_args(audio_info))
-        else:
-            cmd.append("-an")
-
-        if container == "mp4":
-            cmd.extend(["-movflags", "+faststart"])
-
-        cmd.append(output_path)
-
+        metadata_path = cls._write_metadata_file(metadata_entries)
         try:
+            cmd = [
+                ffmpeg,
+                "-y",
+                "-i", input_video,
+            ]
+
+            if metadata_path:
+                cmd.extend(["-f", "ffmetadata", "-i", metadata_path])
+
+            cmd.extend(["-map", "0:v:0"])
+
+            if audio_mode != "none":
+                cmd.extend(["-map", "0:a?"])
+
+            cmd.extend(["-map_metadata", "0"])
+            if metadata_path:
+                cmd.extend(["-map_metadata", "1"])
+            cmd.extend(cls._video_codec_args(
+                ffmpeg,
+                codec,
+                encoder_mode,
+                container,
+                crf,
+                preset,
+            ))
+
+            if audio_mode == "copy":
+                cmd.extend(["-c:a", "copy"])
+            elif audio_mode == "aac":
+                cmd.extend(cls._aac_audio_args(audio_info))
+            else:
+                cmd.append("-an")
+
+            if container == "mp4":
+                cmd.extend(["-movflags", "+faststart"])
+
+            cmd.append(output_path)
+
             subprocess.run(
                 cmd,
                 check=True,
@@ -371,6 +404,19 @@ class WuddSaveVideo:
             raise RuntimeError(
                 f"ffmpeg failed while saving {codec.upper()} video: {stderr or e}"
             ) from e
+        except FileNotFoundError as e:
+            if getattr(e, "winerror", None) == 206:
+                raise RuntimeError(
+                    "Windows refused to start ffmpeg because a command-line path is "
+                    "too long. Shorten the output directory or filename prefix."
+                ) from e
+            raise
+        finally:
+            try:
+                if metadata_path and os.path.exists(metadata_path):
+                    os.remove(metadata_path)
+            except OSError:
+                pass
 
     @staticmethod
     def _video_dimensions(video):
@@ -410,7 +456,7 @@ class WuddSaveVideo:
             ):
                 run += 1
 
-        metadata_args = self._metadata_args(prompt, extra_pnginfo)
+        metadata_entries = self._metadata_entries(prompt, extra_pnginfo)
         results = []
 
         for seq, video in enumerate(videos, start=1):
@@ -438,7 +484,7 @@ class WuddSaveVideo:
                     crf,
                     preset,
                     audio_mode,
-                    metadata_args,
+                    metadata_entries,
                 )
             finally:
                 for path in cleanup_paths:
@@ -877,3 +923,164 @@ class WuddConcatVideos:
                         os.remove(path)
                 except OSError:
                     pass
+
+
+class WuddFastForwardVideo:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "video": ("VIDEO",),
+                "mode": (["speed_multiplier", "target_seconds"], {"default": "speed_multiplier"}),
+                "speed_multiplier": ("FLOAT", {"default": 2.0, "min": 0.01, "max": 100.0, "step": 0.01}),
+                "target_seconds": ("FLOAT", {"default": 5.0, "min": 0.001, "max": 86400.0, "step": 0.001}),
+                "audio_mode": (["keep", "none"], {"default": "keep"}),
+            },
+        }
+
+    RETURN_TYPES = ("VIDEO",)
+    RETURN_NAMES = ("video",)
+    FUNCTION = "fast_forward_video"
+    CATEGORY = WUDD_CATEGORY
+
+    @staticmethod
+    def _validate_speed(speed):
+        speed = float(speed)
+        if not math.isfinite(speed) or speed <= 0:
+            raise ValueError("speed_multiplier must be a positive finite number.")
+        return speed
+
+    @staticmethod
+    def _float_expr(value):
+        return f"{float(value):.12g}"
+
+    @staticmethod
+    def _probe_duration(path):
+        import av
+
+        with av.open(path, mode="r") as container:
+            if container.duration is not None:
+                return max(0.001, float(container.duration / av.time_base))
+
+            video_stream = next(
+                (stream for stream in container.streams if stream.type == "video"),
+                None,
+            )
+            if video_stream is not None:
+                if video_stream.duration is not None and video_stream.time_base is not None:
+                    return max(0.001, float(video_stream.duration * video_stream.time_base))
+                if video_stream.frames and video_stream.average_rate:
+                    return max(0.001, float(video_stream.frames / video_stream.average_rate))
+
+        raise ValueError("Could not determine video duration for target_seconds mode.")
+
+    @classmethod
+    def _speed_from_inputs(cls, input_path, mode, speed_multiplier, target_seconds):
+        if mode == "target_seconds":
+            target_seconds = float(target_seconds)
+            if not math.isfinite(target_seconds) or target_seconds <= 0:
+                raise ValueError("target_seconds must be a positive finite number.")
+            speed = cls._validate_speed(cls._probe_duration(input_path) / target_seconds)
+            return speed, target_seconds
+        return cls._validate_speed(speed_multiplier), None
+
+    @classmethod
+    def _atempo_filter(cls, speed):
+        remaining = cls._validate_speed(speed)
+        factors = []
+
+        while remaining > 2.0:
+            factors.append(2.0)
+            remaining /= 2.0
+
+        while remaining < 0.5:
+            factors.append(0.5)
+            remaining /= 0.5
+
+        factors.append(remaining)
+        return ",".join(f"atempo={cls._float_expr(factor)}" for factor in factors)
+
+    @classmethod
+    def _run_ffmpeg(cls, ffmpeg, input_path, output_path, speed, audio_mode,
+                    target_seconds=None):
+        speed_expr = cls._float_expr(speed)
+        vf = (
+            f"setpts=(PTS-STARTPTS)/{speed_expr},"
+            "scale=ceil(iw/2)*2:ceil(ih/2)*2,setsar=1"
+        )
+        audio_info = WuddSaveVideo._first_audio_info(input_path)
+
+        cmd = [
+            ffmpeg,
+            "-y",
+            "-i", input_path,
+            "-map", "0:v:0",
+            "-vf", vf,
+            *WuddConcatVideos._mp4_video_args(ffmpeg),
+        ]
+
+        if audio_mode == "keep" and audio_info is not None:
+            af = f"asetpts=PTS-STARTPTS,{cls._atempo_filter(speed)}"
+            cmd.extend([
+                "-map", "0:a:0",
+                "-af", af,
+                *WuddSaveVideo._aac_audio_args(audio_info),
+                "-shortest",
+            ])
+        else:
+            cmd.append("-an")
+
+        if target_seconds is not None:
+            cmd.extend(["-t", cls._float_expr(target_seconds)])
+
+        cmd.extend([
+            "-movflags", "+faststart",
+            "-f", "mp4",
+            output_path,
+        ])
+
+        try:
+            subprocess.run(
+                cmd,
+                check=True,
+                capture_output=True,
+                text=True,
+                shell=False,
+                creationflags=CREATE_NO_WINDOW,
+            )
+        except subprocess.CalledProcessError as e:
+            stderr = (e.stderr or e.stdout or "").strip()
+            raise RuntimeError(
+                f"ffmpeg failed while fast-forwarding video: {stderr or e}"
+            ) from e
+
+    def fast_forward_video(self, video, mode="speed_multiplier", speed_multiplier=2.0,
+                           target_seconds=5.0, audio_mode="keep"):
+        from comfy_api.latest import InputImpl
+
+        ffmpeg = resolve_ffmpeg_exe()
+        input_path, temp_input = WuddSaveVideo._materialize_video_source(video)
+        output_path = WuddSaveVideo._temp_path(".mp4")
+
+        try:
+            speed, target_duration = self._speed_from_inputs(
+                input_path,
+                mode,
+                speed_multiplier,
+                target_seconds,
+            )
+            self._run_ffmpeg(
+                ffmpeg,
+                input_path,
+                output_path,
+                speed,
+                audio_mode,
+                target_duration,
+            )
+            return (InputImpl.VideoFromFile(output_path),)
+        finally:
+            try:
+                if temp_input and os.path.exists(temp_input):
+                    os.remove(temp_input)
+            except OSError:
+                pass

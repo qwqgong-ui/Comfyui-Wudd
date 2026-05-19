@@ -201,6 +201,42 @@ class WuddReplaceVideoAudio:
         return temp_input, temp_input
 
     @staticmethod
+    def _probe_video_duration(path):
+        import av
+
+        with av.open(path, mode="r") as container:
+            video_stream = next(
+                (stream for stream in container.streams if stream.type == "video"),
+                None,
+            )
+            if video_stream is not None:
+                if video_stream.duration is not None and video_stream.time_base is not None:
+                    return max(0.001, float(video_stream.duration * video_stream.time_base))
+                if video_stream.frames and video_stream.average_rate:
+                    return max(0.001, float(video_stream.frames / video_stream.average_rate))
+
+            if container.duration is not None:
+                return max(0.001, float(container.duration / av.time_base))
+
+        return 0.001
+
+    @classmethod
+    def _video_timing(cls, video, input_video):
+        start_time = float(getattr(video, "_VideoFromFile__start_time", 0) or 0)
+        duration = float(getattr(video, "_VideoFromFile__duration", 0) or 0)
+        source_duration = cls._probe_video_duration(input_video)
+
+        if start_time < 0:
+            start_time = max(0.0, source_duration + start_time)
+        else:
+            start_time = max(0.0, start_time)
+
+        if duration <= 0:
+            duration = max(0.001, source_duration - start_time)
+
+        return start_time, duration
+
+    @staticmethod
     def _fallback_components(video, audio):
         from fractions import Fraction
         from comfy_api.latest import InputImpl, Types
@@ -221,7 +257,9 @@ class WuddReplaceVideoAudio:
                 "audio": ("AUDIO",),
                 "output_format": (["mp4", "mkv", "mov"], {"default": "mp4"}),
                 "audio_bitrate": (["128k", "192k", "256k", "320k"], {"default": "192k"}),
-                "end_mode": (["shortest", "keep_video_length"], {"default": "shortest"}),
+                # "shortest" is accepted for older workflows, but both modes
+                # now keep output duration aligned to the video stream.
+                "end_mode": (["keep_video_length", "shortest"], {"default": "keep_video_length"}),
             },
         }
 
@@ -246,11 +284,16 @@ class WuddReplaceVideoAudio:
             input_video, temp_input = self._materialize_video_source(video)
             if temp_input:
                 cleanup_paths.append(temp_input)
+            start_time, video_duration = self._video_timing(video, input_video)
             self._write_audio_wav(audio, audio_wav)
 
             cmd = [
                 ffmpeg,
                 "-y",
+            ]
+            if start_time > 0:
+                cmd.extend(["-ss", f"{start_time:.6f}"])
+            cmd.extend([
                 "-i", input_video,
                 "-i", audio_wav,
                 "-map", "0:v:0",
@@ -258,11 +301,11 @@ class WuddReplaceVideoAudio:
                 "-c:v", "copy",
                 "-c:a", "aac",
                 "-b:a", audio_bitrate,
-            ]
+                "-af", "apad",
+                "-t", f"{video_duration:.6f}",
+            ])
             if output_format in ("mp4", "mov"):
                 cmd.extend(["-movflags", "+faststart"])
-            if end_mode == "shortest":
-                cmd.append("-shortest")
             cmd.append(output_path)
 
             subprocess.run(

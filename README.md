@@ -94,6 +94,23 @@ Inputs:
 - `preset`: `fast`, `medium`, `slow`
 - `audio_mode`: `copy`, `aac`, `none`
 
+### Wudd Video Fast Forward
+
+Speed up a `VIDEO` input and output a new `VIDEO`.
+
+- `speed_multiplier` mode uses a direct playback multiplier such as `2.0` for 2x speed.
+- `target_seconds` mode derives the speed from the source duration so the result lasts the requested number of seconds.
+- Video is written as MP4 for downstream video nodes.
+- Audio can be tempo-adjusted with the video and re-encoded as AAC, or removed.
+
+Inputs:
+
+- `video`
+- `mode`: `speed_multiplier`, `target_seconds`
+- `speed_multiplier`
+- `target_seconds`
+- `audio_mode`: `keep`, `none`
+
 ### Wudd Concat Videos
 
 Concatenate `VIDEO` inputs in port order and output a new `VIDEO`.
@@ -208,6 +225,7 @@ Replace a `VIDEO` input's audio track with a supplied `AUDIO` input.
 
 - Video stream is copied with ffmpeg where possible.
 - New audio is encoded as AAC.
+- Output duration follows the video duration: long audio is trimmed, short audio is padded with silence.
 - ffmpeg is resolved internally from a complete local `bin/` set, `imageio-ffmpeg`, or system `PATH`.
 - Outputs a new `VIDEO` object that can be passed to ComfyUI's built-in `Save Video`.
 
@@ -217,7 +235,7 @@ Inputs:
 - `audio`
 - `output_format`: `mp4`, `mkv`, `mov`
 - `audio_bitrate`: `128k`, `192k`, `256k`, `320k`
-- `end_mode`: `shortest`, `keep_video_length`
+- `end_mode`: `keep_video_length` (`shortest` is accepted for legacy workflows and behaves the same)
 
 ### Wudd OpenAI GPT-5.4
 

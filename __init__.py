@@ -6,8 +6,8 @@ ComfyUI-Wudd — 节点注册入口。
     nodes_image.py   图像类节点（Save / DropAlpha / EdgePad / ListImporter / Stitch）
     nodes_text.py    文本类节点（TextSplitter / MultiTextSplitter / PathJoiner）
     nodes_audio.py   音频类节点（VideoAudioExtractor / ReplaceVideoAudio）
-    nodes_video.py   视频类节点（SaveVideo / ConcatVideos）
-    nodes_api.py     外部 API 节点（OpenAIGPT54）
+    nodes_video.py   视频类节点（SaveVideo / FastForwardVideo / ConcatVideos）
+    nodes_api.py     OpenRouter API 节点（GPT / Claude / Gemini 文本，GPT / Gemini 图像）
 前端动态端口脚本位于 ./web/dynamic_ports.js，由 WEB_DIRECTORY 告知 ComfyUI 加载。
 """
 
@@ -25,13 +25,20 @@ from .nodes_text import (
     WuddPathJoiner,
 )
 from .nodes_audio import WuddVideoAudioExtractor, WuddReplaceVideoAudio
-from .nodes_video import WuddSaveVideo, WuddConcatVideos
-from .nodes_api import WuddOpenAIGPT54
+from .nodes_video import WuddSaveVideo, WuddFastForwardVideo, WuddConcatVideos
+from .nodes_api import (
+    WuddOpenRouterGPTText,
+    WuddOpenRouterClaudeText,
+    WuddOpenRouterGeminiText,
+    WuddOpenRouterGPTImage,
+    WuddOpenRouterGeminiImage,
+)
 
 
 NODE_CLASS_MAPPINGS = {
     "WuddMultiSaveImage": WuddMultiSaveImage,
     "WuddSaveVideo": WuddSaveVideo,
+    "WuddFastForwardVideo": WuddFastForwardVideo,
     "WuddConcatVideos": WuddConcatVideos,
     "WuddTextSplitter": WuddTextSplitter,
     "WuddMultiTextSplitter": WuddMultiTextSplitter,
@@ -43,12 +50,17 @@ NODE_CLASS_MAPPINGS = {
     "WuddPathJoiner": WuddPathJoiner,
     "WuddVideoAudioExtractor": WuddVideoAudioExtractor,
     "WuddReplaceVideoAudio": WuddReplaceVideoAudio,
-    "WuddOpenAIGPT54": WuddOpenAIGPT54,
+    "WuddOpenRouterGPTText": WuddOpenRouterGPTText,
+    "WuddOpenRouterClaudeText": WuddOpenRouterClaudeText,
+    "WuddOpenRouterGeminiText": WuddOpenRouterGeminiText,
+    "WuddOpenRouterGPTImage": WuddOpenRouterGPTImage,
+    "WuddOpenRouterGeminiImage": WuddOpenRouterGeminiImage,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "WuddMultiSaveImage": "Wudd Multi Save",
     "WuddSaveVideo": "Wudd Save Video",
+    "WuddFastForwardVideo": "Wudd Video Fast Forward",
     "WuddConcatVideos": "Wudd Concat Videos",
     "WuddTextSplitter": "Wudd Text Splitter",
     "WuddMultiTextSplitter": "Wudd Multi Text Splitter",
@@ -60,7 +72,11 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WuddPathJoiner": "Wudd Path Joiner",
     "WuddVideoAudioExtractor": "Wudd Extract Audio From Video",
     "WuddReplaceVideoAudio": "Wudd Replace Video Audio",
-    "WuddOpenAIGPT54": "Wudd OpenAI GPT-5.4",
+    "WuddOpenRouterGPTText": "Wudd OpenRouter GPT Text",
+    "WuddOpenRouterClaudeText": "Wudd OpenRouter Claude Text",
+    "WuddOpenRouterGeminiText": "Wudd OpenRouter Gemini Text",
+    "WuddOpenRouterGPTImage": "Wudd OpenRouter GPT Image",
+    "WuddOpenRouterGeminiImage": "Wudd OpenRouter Gemini Image",
 }
 
 # 告诉 ComfyUI 加载当前目录下的 web 文件夹中的前端脚本

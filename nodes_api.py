@@ -1,338 +1,1067 @@
 """
-ComfyUI-Wudd — 外部 API 调用类节点。
+OpenRouter API nodes for ComfyUI-Wudd.
 
-包含：
-    WuddOpenAIGPT54   调用 OpenAI 兼容端点（GPT-5.4 系列），
-                      支持 Responses / Chat Completions 两种 api_mode、
-                      可选图像输入、Responses 模式异步轮询。
-                      generate 为 async，HTTP 调用走线程池，多实例可并发。
-                      IS_CHANGED 基于输入做确定性哈希，无变化直接复用缓存。
+The nodes intentionally use the classic ComfyUI custom node API used by the
+rest of this repository.  HTTP work is pushed through asyncio.to_thread so
+multiple API nodes can run concurrently when ComfyUI schedules them together.
 """
 
 import asyncio
-import hashlib
-import json
-import ssl
 import base64
+import hashlib
 import http.client
-import numpy as np
+import json
+import os
+import ssl
 from io import BytesIO
-from PIL import Image
 from urllib.parse import urljoin, urlparse
 
-from .nodes_common import WUDD_CATEGORY
+import numpy as np
+from PIL import Image
+
+from .nodes_common import WUDD_CATEGORY, tensor_to_base64_png
 
 
-class WuddOpenAIGPT54:
-    RESPONSES_URL = "https://api.openai.com/v1/responses"
-    CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_CHAT_PATH = "chat/completions"
 
+TEXT_CATEGORY = f"{WUDD_CATEGORY}/OpenRouter/Text"
+IMAGE_CATEGORY = f"{WUDD_CATEGORY}/OpenRouter/Image"
+
+MAX_TEXT_IMAGE_INPUTS = 16
+MAX_IMAGE_NODE_INPUTS = 16
+
+REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high"]
+TEXT_RESPONSE_FORMATS = ["text", "json_object"]
+IMAGE_RESPONSE_MODALITIES = ["IMAGE+TEXT", "IMAGE"]
+STANDARD_ASPECT_RATIOS = [
+    "auto",
+    "1:1",
+    "2:3",
+    "3:2",
+    "3:4",
+    "4:3",
+    "4:5",
+    "5:4",
+    "9:16",
+    "16:9",
+    "21:9",
+]
+EXTENDED_ASPECT_RATIOS = [
+    *STANDARD_ASPECT_RATIOS,
+    "1:4",
+    "4:1",
+    "1:8",
+    "8:1",
+]
+GPT_IMAGE_SIZES = ["auto", "1K", "2K", "4K"]
+GEMINI_IMAGE_SIZES = ["auto", "0.5K", "1K", "2K", "4K"]
+
+OPENAI_GPT_TEXT_MODELS = ["openai/gpt-5.5", "openai/gpt-5.5-pro"]
+OPENAI_GPT_IMAGE_MODELS = ["openai/gpt-5.4-image-2"]
+CLAUDE_TEXT_MODELS = ["anthropic/claude-opus-4.7", "anthropic/claude-sonnet-4.6"]
+GEMINI_TEXT_MODELS = ["google/gemini-3.1-pro-preview", "google/gemini-3-flash-preview"]
+GEMINI_IMAGE_MODELS = ["google/gemini-3-pro-image-preview", "google/gemini-3.1-flash-image-preview"]
+
+
+def _image_port_inputs(max_images):
+    return {f"image_{i}": ("IMAGE",) for i in range(1, max_images + 1)}
+
+
+def _api_runtime_inputs():
+    return {
+        "base_url": (
+            "STRING",
+            {
+                "default": OPENROUTER_BASE_URL,
+                "advanced": True,
+            },
+        ),
+        "timeout_seconds": (
+            "INT",
+            {
+                "default": 300,
+                "min": 5,
+                "max": 3600,
+                "step": 1,
+                "advanced": True,
+            },
+        ),
+        "verify_ssl": (
+            "BOOLEAN",
+            {
+                "default": True,
+                "advanced": True,
+            },
+        ),
+    }
+
+
+def _system_and_extra_inputs():
+    return {
+        "system_prompt": (
+            "STRING",
+            {
+                "default": "",
+                "multiline": True,
+            },
+        ),
+        "extra_body_json": (
+            "STRING",
+            {
+                "default": "",
+                "multiline": True,
+                "advanced": True,
+            },
+        ),
+    }
+
+
+def _normalize_base_url(base_url):
+    base_url = (base_url or "").strip() or OPENROUTER_BASE_URL
+    if not base_url.startswith(("http://", "https://")):
+        base_url = "https://" + base_url
+    return base_url.rstrip("/")
+
+
+def _build_chat_url(base_url):
+    base_url = _normalize_base_url(base_url)
+    if base_url.endswith("/chat/completions"):
+        return base_url
+    return urljoin(base_url + "/", OPENROUTER_CHAT_PATH)
+
+
+def _resolve_api_key(api_key):
+    api_key = (api_key or "").strip() or os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError("OpenRouter API key is required. Set api_key or OPENROUTER_API_KEY.")
+    return api_key
+
+
+def _validate_model(model):
+    model = (model or "").strip()
+    if not model:
+        raise ValueError("OpenRouter model id cannot be empty.")
+    return model
+
+
+def _validate_prompt(prompt):
+    prompt = str(prompt or "")
+    if not prompt.strip():
+        raise ValueError("Prompt cannot be empty.")
+    return prompt
+
+
+def _parse_json_object(text, field_name):
+    text = (text or "").strip()
+    if not text:
+        return {}
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{field_name} must be a valid JSON object: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be a JSON object.")
+    return value
+
+
+def _split_stop_sequences(stop_sequences):
+    values = []
+    for line in str(stop_sequences or "").splitlines():
+        line = line.strip()
+        if line:
+            values.append(line)
+    return values
+
+
+def _add_reasoning(payload, reasoning_effort):
+    if reasoning_effort and reasoning_effort != "none":
+        payload["reasoning"] = {"effort": reasoning_effort}
+
+
+def _add_response_format(payload, response_format):
+    if response_format == "json_object":
+        payload["response_format"] = {"type": "json_object"}
+
+
+def _add_stop_sequences(payload, stop_sequences):
+    stop = _split_stop_sequences(stop_sequences)
+    if stop:
+        payload["stop"] = stop
+
+
+def _add_image_config(payload, model, aspect_ratio, image_size):
+    if image_size == "0.5K" and model != "google/gemini-3.1-flash-image-preview":
+        raise ValueError("0.5K image_size is only supported by google/gemini-3.1-flash-image-preview.")
+
+    image_config = {}
+    if aspect_ratio and aspect_ratio != "auto":
+        image_config["aspect_ratio"] = aspect_ratio
+    if image_size and image_size != "auto":
+        image_config["image_size"] = image_size
+    if image_config:
+        payload["image_config"] = image_config
+
+
+def _hash_value(hasher, value):
+    if hasattr(value, "detach") and hasattr(value, "cpu"):
+        arr = value.detach().cpu().numpy()
+        hasher.update(str(arr.shape).encode("utf-8"))
+        hasher.update(arr.tobytes())
+        return
+    if isinstance(value, np.ndarray):
+        hasher.update(str(value.shape).encode("utf-8"))
+        hasher.update(value.tobytes())
+        return
+    if isinstance(value, dict):
+        for key in sorted(value):
+            _hash_value(hasher, key)
+            _hash_value(hasher, value[key])
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _hash_value(hasher, item)
+        return
+    hasher.update(str(value).encode("utf-8"))
+    hasher.update(b"\x00")
+
+
+def _stable_hash(*args, **kwargs):
+    hasher = hashlib.sha256()
+    _hash_value(hasher, args)
+    _hash_value(hasher, kwargs)
+    return hasher.hexdigest()
+
+
+def _flatten_image_inputs(values, max_images):
+    frames = []
+    for image in values:
+        if image is None:
+            continue
+        shape = getattr(image, "shape", None)
+        if shape is None:
+            raise ValueError("Image input is not a tensor-like object.")
+        if len(shape) == 4:
+            for index in range(shape[0]):
+                frames.append(image[index])
+                if len(frames) >= max_images:
+                    return frames
+        elif len(shape) == 3:
+            frames.append(image)
+            if len(frames) >= max_images:
+                return frames
+        else:
+            raise ValueError(f"Unsupported IMAGE tensor shape: {tuple(shape)}")
+    return frames
+
+
+def _collect_numbered_images(kwargs, max_images):
+    values = [kwargs.get(f"image_{i}") for i in range(1, max_images + 1)]
+    return _flatten_image_inputs(values, max_images)
+
+
+def _image_frame_to_data_url(image):
+    return f"data:image/png;base64,{tensor_to_base64_png(image)}"
+
+
+def _build_user_content(prompt, images):
+    content = [{"type": "text", "text": prompt}]
+    for image in images:
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": _image_frame_to_data_url(image),
+                },
+            }
+        )
+    return content
+
+
+def _build_messages(prompt, system_prompt="", images=None):
+    messages = []
+    system_prompt = str(system_prompt or "").strip()
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    if images:
+        messages.append({"role": "user", "content": _build_user_content(prompt, images)})
+    else:
+        messages.append({"role": "user", "content": prompt})
+    return messages
+
+
+def _json_dumps(value):
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _http_json(url, api_key, payload, timeout_seconds=300, verify_ssl=True):
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "X-Title": "ComfyUI-Wudd",
+    }
+    body = _json_dumps(payload).encode("utf-8")
+    status, raw_body = _http_request(
+        url,
+        method="POST",
+        headers=headers,
+        body=body,
+        timeout_seconds=timeout_seconds,
+        verify_ssl=verify_ssl,
+    )
+    if status >= 400:
+        raise ValueError(f"OpenRouter API error {status}: {raw_body}")
+    try:
+        return json.loads(raw_body)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"OpenRouter returned invalid JSON: {raw_body}") from exc
+
+
+def _http_bytes(url, timeout_seconds=300, verify_ssl=True):
+    status, raw_body = _http_request(
+        url,
+        method="GET",
+        headers={},
+        body=None,
+        timeout_seconds=timeout_seconds,
+        verify_ssl=verify_ssl,
+        decode_body=False,
+    )
+    if status >= 400:
+        raise ValueError(f"Image download failed with HTTP {status}.")
+    return raw_body
+
+
+def _http_request(url, method, headers, body, timeout_seconds, verify_ssl, decode_body=True):
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"Unsupported URL scheme: {url}")
+
+    ssl_context = None
+    if parsed.scheme == "https" and not verify_ssl:
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+
+    connection_cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+
+    conn = None
+    try:
+        if parsed.scheme == "https":
+            conn = connection_cls(parsed.hostname, port, timeout=timeout_seconds, context=ssl_context)
+        else:
+            conn = connection_cls(parsed.hostname, port, timeout=timeout_seconds)
+        conn.request(method, path, body=body, headers=headers)
+        resp = conn.getresponse()
+        raw = resp.read()
+        if decode_body:
+            raw = raw.decode("utf-8", errors="replace")
+        return resp.status, raw
+    except ssl.SSLError as exc:
+        raise ValueError(f"SSL error while reaching OpenRouter: {exc}") from exc
+    except OSError as exc:
+        raise ValueError(f"Failed to reach OpenRouter: {exc}") from exc
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except OSError:
+                pass
+
+
+def _first_message(response_json):
+    choices = response_json.get("choices") or []
+    if not choices:
+        return {}
+    return choices[0].get("message") or {}
+
+
+def _extract_text_from_content(content):
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+
+    parts = []
+    for item in content:
+        if isinstance(item, str):
+            parts.append(item)
+            continue
+        if not isinstance(item, dict):
+            continue
+        item_type = item.get("type")
+        if item_type in ("text", "output_text") and isinstance(item.get("text"), str):
+            parts.append(item["text"])
+        elif isinstance(item.get("text"), str):
+            parts.append(item["text"])
+    return "".join(parts)
+
+
+def _extract_text(response_json):
+    texts = []
+    for choice in response_json.get("choices") or []:
+        message = choice.get("message") or {}
+        text = _extract_text_from_content(message.get("content"))
+        if text:
+            texts.append(text)
+    return "\n\n".join(texts)
+
+
+def _extract_reasoning(response_json):
+    message = _first_message(response_json)
+    reasoning = message.get("reasoning") or response_json.get("reasoning")
+    if isinstance(reasoning, str):
+        return reasoning
+    if reasoning:
+        return _json_dumps(reasoning)
+
+    details = message.get("reasoning_details") or response_json.get("reasoning_details")
+    if not details:
+        return ""
+    if isinstance(details, str):
+        return details
+    if isinstance(details, list):
+        parts = []
+        for item in details:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("summary")
+                parts.append(text if isinstance(text, str) else _json_dumps(item))
+        return "\n".join(part for part in parts if part)
+    return _json_dumps(details)
+
+
+def _extract_image_url_from_value(value):
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, dict):
+        return None
+    if isinstance(value.get("url"), str):
+        return value["url"]
+    if isinstance(value.get("b64_json"), str):
+        return f"data:image/png;base64,{value['b64_json']}"
+    return None
+
+
+def _extract_generated_image_urls(response_json):
+    urls = []
+    for choice in response_json.get("choices") or []:
+        message = choice.get("message") or {}
+
+        for image in message.get("images") or []:
+            if not isinstance(image, dict):
+                continue
+            url = _extract_image_url_from_value(image.get("image_url")) or _extract_image_url_from_value(image)
+            if url:
+                urls.append(url)
+
+        content = message.get("content")
+        if isinstance(content, list):
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") in ("image_url", "output_image", "image"):
+                    url = (
+                        _extract_image_url_from_value(item.get("image_url"))
+                        or _extract_image_url_from_value(item.get("image"))
+                        or _extract_image_url_from_value(item)
+                    )
+                    if url:
+                        urls.append(url)
+    return urls
+
+
+def _decode_data_url(data_url):
+    try:
+        header, data = data_url.split(",", 1)
+    except ValueError as exc:
+        raise ValueError("Invalid data URL returned by OpenRouter.") from exc
+    if ";base64" not in header:
+        raise ValueError("Only base64 data URLs are supported for returned images.")
+    return base64.b64decode(data)
+
+
+def _load_pil_from_url(image_url, timeout_seconds=300, verify_ssl=True):
+    if image_url.startswith("data:"):
+        raw = _decode_data_url(image_url)
+    else:
+        raw = _http_bytes(image_url, timeout_seconds=timeout_seconds, verify_ssl=verify_ssl)
+    try:
+        image = Image.open(BytesIO(raw))
+        image.load()
+        return image.convert("RGB")
+    except Exception as exc:
+        raise ValueError("OpenRouter returned an image that Pillow could not decode.") from exc
+
+
+def _pil_images_to_tensor_batch(images):
+    import torch
+
+    if not images:
+        raise ValueError("No images to convert.")
+
+    max_width = max(image.width for image in images)
+    max_height = max(image.height for image in images)
+    tensors = []
+    for image in images:
+        canvas = Image.new("RGB", (max_width, max_height), (0, 0, 0))
+        canvas.paste(image.convert("RGB"), (0, 0))
+        arr = np.asarray(canvas).astype(np.float32) / 255.0
+        tensors.append(torch.from_numpy(arr).unsqueeze(0))
+    return torch.cat(tensors, dim=0)
+
+
+class _OpenRouterBase:
+    FUNCTION = "generate"
+
+    @classmethod
+    def IS_CHANGED(cls, *args, **kwargs):
+        return _stable_hash(cls.__name__, args, kwargs)
+
+    async def _send_chat(self, api_key, base_url, payload, timeout_seconds, verify_ssl):
+        api_key = _resolve_api_key(api_key)
+        url = _build_chat_url(base_url)
+        return await asyncio.to_thread(
+            _http_json,
+            url,
+            api_key,
+            payload,
+            int(timeout_seconds),
+            bool(verify_ssl),
+        )
+
+    async def _text_request(
+        self,
+        prompt,
+        api_key,
+        model,
+        payload_options,
+        system_prompt="",
+        extra_body_json="",
+        images=None,
+        base_url=OPENROUTER_BASE_URL,
+        timeout_seconds=300,
+        verify_ssl=True,
+    ):
+        prompt = _validate_prompt(prompt)
+        model = _validate_model(model)
+
+        payload = {
+            "model": model,
+            "messages": _build_messages(prompt, system_prompt=system_prompt, images=images),
+            "stream": False,
+        }
+        payload.update(payload_options)
+        payload.update(_parse_json_object(extra_body_json, "extra_body_json"))
+
+        response_json = await self._send_chat(api_key, base_url, payload, timeout_seconds, verify_ssl)
+        text = _extract_text(response_json)
+        if not text:
+            raise ValueError(f"No text output found in OpenRouter response: {_json_dumps(response_json)}")
+        return text, _extract_reasoning(response_json), response_json.get("id", "")
+
+    async def _image_request(
+        self,
+        prompt,
+        api_key,
+        model,
+        payload_options,
+        system_prompt="",
+        extra_body_json="",
+        images=None,
+        base_url=OPENROUTER_BASE_URL,
+        timeout_seconds=300,
+        verify_ssl=True,
+    ):
+        prompt = _validate_prompt(prompt)
+        model = _validate_model(model)
+
+        payload = {
+            "model": model,
+            "messages": _build_messages(prompt, system_prompt=system_prompt, images=images),
+            "stream": False,
+        }
+        payload.update(payload_options)
+        payload.update(_parse_json_object(extra_body_json, "extra_body_json"))
+
+        response_json = await self._send_chat(api_key, base_url, payload, timeout_seconds, verify_ssl)
+        image_urls = _extract_generated_image_urls(response_json)
+        if not image_urls:
+            text = _extract_text(response_json).strip()
+            if text:
+                raise ValueError(f"OpenRouter returned no image. Text response: {text}")
+            raise ValueError(f"No image output found in OpenRouter response: {_json_dumps(response_json)}")
+
+        pil_images = await asyncio.gather(
+            *[
+                asyncio.to_thread(
+                    _load_pil_from_url,
+                    image_url,
+                    int(timeout_seconds),
+                    bool(verify_ssl),
+                )
+                for image_url in image_urls
+            ]
+        )
+        return _pil_images_to_tensor_batch(pil_images), _extract_text(response_json), response_json.get("id", "")
+
+
+class WuddOpenRouterGPTText(_OpenRouterBase):
+    @classmethod
+    def INPUT_TYPES(cls):
+        optional = _system_and_extra_inputs()
+        optional.update(_image_port_inputs(MAX_TEXT_IMAGE_INPUTS))
+        return {
+            "required": {
+                "prompt": ("STRING", {"default": "", "multiline": True}),
+                "api_key": ("STRING", {"default": ""}),
+                "model": (OPENAI_GPT_TEXT_MODELS, {"default": "openai/gpt-5.5"}),
+                "max_tokens": (
+                    "INT",
+                    {"default": 4096, "min": 16, "max": 128000, "step": 1},
+                ),
+                "reasoning_effort": (REASONING_EFFORTS, {"default": "none"}),
+                "include_reasoning": ("BOOLEAN", {"default": False}),
+                "response_format": (TEXT_RESPONSE_FORMATS, {"default": "text"}),
+                "seed": (
+                    "INT",
+                    {
+                        "default": 0,
+                        "min": 0,
+                        "max": 2147483647,
+                        "step": 1,
+                        "control_after_generate": True,
+                    },
+                ),
+                **_api_runtime_inputs(),
+            },
+            "optional": optional,
+        }
+
+    RETURN_TYPES = ("STRING", "STRING", "STRING")
+    RETURN_NAMES = ("text", "reasoning", "response_id")
+    CATEGORY = TEXT_CATEGORY
+
+    async def generate(
+        self,
+        prompt,
+        api_key,
+        model,
+        max_tokens,
+        reasoning_effort,
+        include_reasoning,
+        response_format,
+        seed,
+        base_url,
+        timeout_seconds,
+        verify_ssl,
+        system_prompt="",
+        extra_body_json="",
+        **kwargs,
+    ):
+        options = {
+            "max_tokens": int(max_tokens),
+        }
+        _add_reasoning(options, reasoning_effort)
+        _add_response_format(options, response_format)
+        if include_reasoning:
+            options["include_reasoning"] = True
+        if int(seed) > 0:
+            options["seed"] = int(seed)
+
+        images = _collect_numbered_images(kwargs, MAX_TEXT_IMAGE_INPUTS)
+        return await self._text_request(
+            prompt,
+            api_key,
+            model,
+            options,
+            system_prompt=system_prompt,
+            extra_body_json=extra_body_json,
+            images=images,
+            base_url=base_url,
+            timeout_seconds=timeout_seconds,
+            verify_ssl=verify_ssl,
+        )
+
+
+class WuddOpenRouterClaudeText(_OpenRouterBase):
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
                 "prompt": ("STRING", {"default": "", "multiline": True}),
                 "api_key": ("STRING", {"default": ""}),
-                "base_url": ("STRING", {"default": "https://api.openai.com/v1"}),
-                "model": ("STRING", {"default": "gpt-5.4"}),
-                "api_mode": (["responses", "chat_completions"], {"default": "responses"}),
-                "reasoning_effort": (["none", "low", "medium", "high", "xhigh"], {"default": "medium"}),
-                "verbosity": (["low", "medium", "high"], {"default": "medium"}),
-                "verify_ssl": ("BOOLEAN", {"default": True}),
-                "max_output_tokens": ("INT", {"default": 4096, "min": 16, "max": 131072}),
-                "poll_interval": ("FLOAT", {"default": 1.0, "min": 0.2, "max": 10.0, "step": 0.1}),
-                "max_wait_seconds": ("INT", {"default": 120, "min": 5, "max": 3600}),
+                "model": (CLAUDE_TEXT_MODELS, {"default": "anthropic/claude-sonnet-4.6"}),
+                "max_tokens": (
+                    "INT",
+                    {"default": 4096, "min": 16, "max": 128000, "step": 1},
+                ),
+                "temperature": (
+                    "FLOAT",
+                    {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01},
+                ),
+                "top_p": (
+                    "FLOAT",
+                    {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01},
+                ),
+                "top_k": (
+                    "INT",
+                    {"default": 0, "min": 0, "max": 1000, "step": 1},
+                ),
+                "verbosity": (["none", "low", "medium", "high", "xhigh", "max"], {"default": "none"}),
+                "reasoning_effort": (REASONING_EFFORTS, {"default": "none"}),
+                "include_reasoning": ("BOOLEAN", {"default": False}),
+                **_api_runtime_inputs(),
             },
             "optional": {
-                "instructions": ("STRING", {"default": "", "multiline": True}),
-                "images": ("IMAGE",),
+                **_system_and_extra_inputs(),
+                "stop_sequences": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "multiline": True,
+                        "advanced": True,
+                    },
+                ),
             },
         }
 
-    RETURN_TYPES = ("STRING", "STRING")
-    RETURN_NAMES = ("text", "response_id")
-    FUNCTION = "generate"
-    CATEGORY = WUDD_CATEGORY
-
-    @staticmethod
-    def _validate_api_key(api_key):
-        api_key = (api_key or "").strip()
-        if not api_key:
-            raise ValueError("OpenAI API key is required.")
-        return api_key
-
-    @staticmethod
-    def _normalize_base_url(base_url):
-        base_url = (base_url or "").strip()
-        if not base_url:
-            return "https://api.openai.com/v1"
-        if not base_url.startswith(("http://", "https://")):
-            base_url = "https://" + base_url
-        return base_url.rstrip("/")
-
-    @classmethod
-    def _build_endpoint(cls, base_url, api_mode, response_id=None):
-        if api_mode == "chat_completions":
-            return urljoin(base_url + "/", "chat/completions")
-        endpoint = urljoin(base_url + "/", "responses")
-        if response_id:
-            endpoint = f"{endpoint}/{response_id}"
-        return endpoint
-
-    @staticmethod
-    def _tensor_to_base64_png(image_tensor):
-        image_np = (255.0 * image_tensor.cpu().numpy()).clip(0, 255).astype(np.uint8)
-        if image_np.shape[-1] == 4:
-            mode = "RGBA"
-        else:
-            mode = "RGB"
-        img = Image.fromarray(image_np, mode=mode)
-        buffer = BytesIO()
-        img.save(buffer, format="PNG")
-        return base64.b64encode(buffer.getvalue()).decode("ascii")
-
-    @classmethod
-    def _build_input_content(cls, prompt, images=None):
-        content = [{"type": "input_text", "text": prompt}]
-        if images is not None:
-            for i in range(images.shape[0]):
-                content.append(
-                    {
-                        "type": "input_image",
-                        "detail": "auto",
-                        "image_url": f"data:image/png;base64,{cls._tensor_to_base64_png(images[i])}",
-                    }
-                )
-        return [{"role": "user", "content": content}]
-
-    @staticmethod
-    def _extract_text(response_json, api_mode):
-        if api_mode == "chat_completions":
-            choices = response_json.get("choices") or []
-            if choices:
-                message = choices[0].get("message") or {}
-                content = message.get("content", "")
-                if isinstance(content, str):
-                    return content
-                if isinstance(content, list):
-                    text_parts = []
-                    for item in content:
-                        if item.get("type") == "text":
-                            text_parts.append(item.get("text", ""))
-                    return "".join(text_parts)
-            return ""
-
-        output_text = response_json.get("output_text")
-        if output_text:
-            return output_text
-
-        output = response_json.get("output", [])
-        for item in output:
-            if item.get("type") != "message":
-                continue
-            for content in item.get("content", []):
-                if content.get("type") == "output_text":
-                    return content.get("text", "")
-        return ""
-
-    @staticmethod
-    def _http_json(url, api_key, payload=None, method="POST", timeout=300, verify_ssl=True):
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        body = None if payload is None else json.dumps(payload).encode("utf-8")
-        parsed = urlparse(url)
-        if parsed.scheme not in ("http", "https"):
-            raise ValueError(f"Unsupported URL scheme: {url}")
-
-        ssl_context = None
-        if not verify_ssl:
-            ssl_context = ssl.create_default_context()
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
-
-        connection_cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
-        port = parsed.port
-        if port is None:
-            port = 443 if parsed.scheme == "https" else 80
-        path = parsed.path or "/"
-        if parsed.query:
-            path = f"{path}?{parsed.query}"
-
-        conn = None
-        try:
-            if parsed.scheme == "https":
-                conn = connection_cls(parsed.hostname, port, timeout=timeout, context=ssl_context)
-            else:
-                conn = connection_cls(parsed.hostname, port, timeout=timeout)
-            conn.request(method, path, body=body, headers=headers)
-            resp = conn.getresponse()
-            raw_body = resp.read().decode("utf-8", errors="replace")
-        except ssl.SSLError as e:
-            raise ValueError(f"SSL error while reaching OpenAI-compatible API: {e}") from e
-        except OSError as e:
-            raise ValueError(f"Failed to reach OpenAI-compatible API: {e}") from e
-        finally:
-            if conn is not None:
-                try:
-                    conn.close()
-                except OSError:
-                    pass
-
-        if resp.status >= 400:
-            raise ValueError(f"OpenAI API error {resp.status}: {raw_body}")
-
-        try:
-            return json.loads(raw_body)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"OpenAI API returned invalid JSON: {raw_body}") from e
-
-    @classmethod
-    async def _wait_for_response(cls, api_key, base_url, response_id, poll_interval, max_wait_seconds, verify_ssl):
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + max_wait_seconds
-        while loop.time() < deadline:
-            response_json = await asyncio.to_thread(
-                cls._http_json,
-                cls._build_endpoint(base_url, "responses", response_id),
-                api_key,
-                None,
-                "GET",
-                max(30, int(poll_interval * 10)),
-                verify_ssl,
-            )
-            status = response_json.get("status")
-            if status in ("completed", "incomplete"):
-                return response_json
-            if status in ("failed", "cancelled", "canceled"):
-                raise ValueError(f"OpenAI response failed with status '{status}': {json.dumps(response_json, ensure_ascii=False)}")
-            await asyncio.sleep(poll_interval)
-        raise TimeoutError(f"Timed out waiting for OpenAI response after {max_wait_seconds} seconds.")
-
-    @classmethod
-    def IS_CHANGED(
-        cls,
-        prompt,
-        api_key,
-        base_url,
-        model,
-        api_mode,
-        reasoning_effort,
-        verbosity,
-        verify_ssl,
-        max_output_tokens,
-        poll_interval,
-        max_wait_seconds,
-        instructions="",
-        images=None,
-    ):
-        h = hashlib.sha256()
-        for part in (
-            prompt,
-            api_key,
-            base_url,
-            model,
-            api_mode,
-            reasoning_effort,
-            verbosity,
-            str(bool(verify_ssl)),
-            str(int(max_output_tokens)),
-            f"{float(poll_interval):.6f}",
-            str(int(max_wait_seconds)),
-            instructions or "",
-        ):
-            h.update(str(part).encode("utf-8"))
-            h.update(b"\x00")
-        if images is not None:
-            arr = images.cpu().numpy() if hasattr(images, "cpu") else np.asarray(images)
-            h.update(str(arr.shape).encode("utf-8"))
-            h.update(arr.tobytes())
-        return h.hexdigest()
+    RETURN_TYPES = ("STRING", "STRING", "STRING")
+    RETURN_NAMES = ("text", "reasoning", "response_id")
+    CATEGORY = TEXT_CATEGORY
 
     async def generate(
         self,
         prompt,
         api_key,
-        base_url,
         model,
-        api_mode,
-        reasoning_effort,
+        max_tokens,
+        temperature,
+        top_p,
+        top_k,
         verbosity,
+        reasoning_effort,
+        include_reasoning,
+        base_url,
+        timeout_seconds,
         verify_ssl,
-        max_output_tokens,
-        poll_interval,
-        max_wait_seconds,
-        instructions="",
-        images=None,
+        system_prompt="",
+        extra_body_json="",
+        stop_sequences="",
     ):
-        api_key = self._validate_api_key(api_key)
-        base_url = self._normalize_base_url(base_url)
-        prompt = str(prompt or "")
-        if not prompt.strip():
-            raise ValueError("Prompt cannot be empty.")
+        options = {
+            "max_tokens": int(max_tokens),
+        }
+        supports_sampling = "sonnet" in str(model).lower()
+        if supports_sampling and float(temperature) != 1.0:
+            options["temperature"] = float(temperature)
+        if supports_sampling and float(top_p) != 1.0:
+            options["top_p"] = float(top_p)
+        if supports_sampling and int(top_k) > 0:
+            options["top_k"] = int(top_k)
+        if verbosity != "none":
+            options["verbosity"] = verbosity
+        _add_reasoning(options, reasoning_effort)
+        _add_stop_sequences(options, stop_sequences)
+        if include_reasoning:
+            options["include_reasoning"] = True
 
-        if api_mode == "chat_completions":
-            message_content = [{"type": "text", "text": prompt}]
-            if images is not None:
-                for i in range(images.shape[0]):
-                    message_content.append(
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{self._tensor_to_base64_png(images[i])}"},
-                        }
-                    )
-            payload = {
-                "model": model,
-                "messages": [{"role": "user", "content": message_content}],
-                "max_completion_tokens": int(max_output_tokens),
-            }
-            if instructions and instructions.strip():
-                payload["messages"].insert(0, {"role": "system", "content": instructions})
-            if reasoning_effort != "none":
-                payload["reasoning_effort"] = reasoning_effort
-            response_json = await asyncio.to_thread(
-                self._http_json,
-                self._build_endpoint(base_url, api_mode),
-                api_key,
-                payload,
-                "POST",
-                300,
-                verify_ssl,
-            )
-            response_id = response_json.get("id", "")
-        else:
-            payload = {
-                "model": model,
-                "input": self._build_input_content(prompt, images),
-                "max_output_tokens": int(max_output_tokens),
-                "store": True,
-                "text": {"verbosity": verbosity},
-                "reasoning": {"effort": reasoning_effort},
-            }
-            if instructions and instructions.strip():
-                payload["instructions"] = instructions
+        return await self._text_request(
+            prompt,
+            api_key,
+            model,
+            options,
+            system_prompt=system_prompt,
+            extra_body_json=extra_body_json,
+            base_url=base_url,
+            timeout_seconds=timeout_seconds,
+            verify_ssl=verify_ssl,
+        )
 
-            response_json = await asyncio.to_thread(
-                self._http_json,
-                self._build_endpoint(base_url, api_mode),
-                api_key,
-                payload,
-                "POST",
-                300,
-                verify_ssl,
-            )
-            response_id = response_json.get("id", "")
-            status = response_json.get("status")
 
-            if status not in ("completed", "incomplete"):
-                if not response_id:
-                    raise ValueError(f"OpenAI API returned no response id: {json.dumps(response_json, ensure_ascii=False)}")
-                response_json = await self._wait_for_response(
-                    api_key, base_url, response_id, poll_interval, max_wait_seconds, verify_ssl
-                )
+class WuddOpenRouterGeminiText(_OpenRouterBase):
+    @classmethod
+    def INPUT_TYPES(cls):
+        optional = _system_and_extra_inputs()
+        optional.update(_image_port_inputs(MAX_TEXT_IMAGE_INPUTS))
+        optional["stop_sequences"] = (
+            "STRING",
+            {
+                "default": "",
+                "multiline": True,
+                "advanced": True,
+            },
+        )
+        return {
+            "required": {
+                "prompt": ("STRING", {"default": "", "multiline": True}),
+                "api_key": ("STRING", {"default": ""}),
+                "model": (GEMINI_TEXT_MODELS, {"default": "google/gemini-3.1-pro-preview"}),
+                "max_tokens": (
+                    "INT",
+                    {"default": 4096, "min": 16, "max": 128000, "step": 1},
+                ),
+                "temperature": (
+                    "FLOAT",
+                    {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.01},
+                ),
+                "top_p": (
+                    "FLOAT",
+                    {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01},
+                ),
+                "reasoning_effort": (REASONING_EFFORTS, {"default": "none"}),
+                "include_reasoning": ("BOOLEAN", {"default": False}),
+                "response_format": (TEXT_RESPONSE_FORMATS, {"default": "text"}),
+                "seed": (
+                    "INT",
+                    {
+                        "default": 0,
+                        "min": 0,
+                        "max": 2147483647,
+                        "step": 1,
+                        "control_after_generate": True,
+                    },
+                ),
+                **_api_runtime_inputs(),
+            },
+            "optional": optional,
+        }
 
-        text = self._extract_text(response_json, api_mode)
-        if not text:
-            raise ValueError(f"No text output found in OpenAI response: {json.dumps(response_json, ensure_ascii=False)}")
-        return (text, response_json.get("id", response_id))
+    RETURN_TYPES = ("STRING", "STRING", "STRING")
+    RETURN_NAMES = ("text", "reasoning", "response_id")
+    CATEGORY = TEXT_CATEGORY
+
+    async def generate(
+        self,
+        prompt,
+        api_key,
+        model,
+        max_tokens,
+        temperature,
+        top_p,
+        reasoning_effort,
+        include_reasoning,
+        response_format,
+        seed,
+        base_url,
+        timeout_seconds,
+        verify_ssl,
+        system_prompt="",
+        extra_body_json="",
+        stop_sequences="",
+        **kwargs,
+    ):
+        options = {
+            "max_tokens": int(max_tokens),
+        }
+        if float(temperature) != 1.0:
+            options["temperature"] = float(temperature)
+        if float(top_p) != 1.0:
+            options["top_p"] = float(top_p)
+        if int(seed) > 0:
+            options["seed"] = int(seed)
+        _add_reasoning(options, reasoning_effort)
+        _add_response_format(options, response_format)
+        _add_stop_sequences(options, stop_sequences)
+        if include_reasoning:
+            options["include_reasoning"] = True
+
+        images = _collect_numbered_images(kwargs, MAX_TEXT_IMAGE_INPUTS)
+        return await self._text_request(
+            prompt,
+            api_key,
+            model,
+            options,
+            system_prompt=system_prompt,
+            extra_body_json=extra_body_json,
+            images=images,
+            base_url=base_url,
+            timeout_seconds=timeout_seconds,
+            verify_ssl=verify_ssl,
+        )
+
+
+class WuddOpenRouterGPTImage(_OpenRouterBase):
+    @classmethod
+    def INPUT_TYPES(cls):
+        optional = _system_and_extra_inputs()
+        optional.update(_image_port_inputs(MAX_IMAGE_NODE_INPUTS))
+        return {
+            "required": {
+                "prompt": ("STRING", {"default": "", "multiline": True}),
+                "api_key": ("STRING", {"default": ""}),
+                "model": (OPENAI_GPT_IMAGE_MODELS, {"default": "openai/gpt-5.4-image-2"}),
+                "response_modalities": (IMAGE_RESPONSE_MODALITIES, {"default": "IMAGE+TEXT"}),
+                "aspect_ratio": (STANDARD_ASPECT_RATIOS, {"default": "auto"}),
+                "image_size": (GPT_IMAGE_SIZES, {"default": "auto"}),
+                "max_tokens": (
+                    "INT",
+                    {"default": 4096, "min": 16, "max": 128000, "step": 1},
+                ),
+                "reasoning_effort": (REASONING_EFFORTS, {"default": "none"}),
+                "seed": (
+                    "INT",
+                    {
+                        "default": 0,
+                        "min": 0,
+                        "max": 2147483647,
+                        "step": 1,
+                        "control_after_generate": True,
+                    },
+                ),
+                **_api_runtime_inputs(),
+            },
+            "optional": optional,
+        }
+
+    RETURN_TYPES = ("IMAGE", "STRING", "STRING")
+    RETURN_NAMES = ("image", "text", "response_id")
+    CATEGORY = IMAGE_CATEGORY
+
+    async def generate(
+        self,
+        prompt,
+        api_key,
+        model,
+        response_modalities,
+        aspect_ratio,
+        image_size,
+        max_tokens,
+        reasoning_effort,
+        seed,
+        base_url,
+        timeout_seconds,
+        verify_ssl,
+        system_prompt="",
+        extra_body_json="",
+        **kwargs,
+    ):
+        options = {
+            "modalities": ["image"] if response_modalities == "IMAGE" else ["image", "text"],
+            "max_tokens": int(max_tokens),
+        }
+        _add_image_config(options, model, aspect_ratio, image_size)
+        if int(seed) > 0:
+            options["seed"] = int(seed)
+        _add_reasoning(options, reasoning_effort)
+
+        images = _collect_numbered_images(kwargs, MAX_IMAGE_NODE_INPUTS)
+        return await self._image_request(
+            prompt,
+            api_key,
+            model,
+            options,
+            system_prompt=system_prompt,
+            extra_body_json=extra_body_json,
+            images=images,
+            base_url=base_url,
+            timeout_seconds=timeout_seconds,
+            verify_ssl=verify_ssl,
+        )
+
+
+class WuddOpenRouterGeminiImage(_OpenRouterBase):
+    @classmethod
+    def INPUT_TYPES(cls):
+        optional = _system_and_extra_inputs()
+        optional.update(_image_port_inputs(MAX_IMAGE_NODE_INPUTS))
+        return {
+            "required": {
+                "prompt": ("STRING", {"default": "", "multiline": True}),
+                "api_key": ("STRING", {"default": ""}),
+                "model": (GEMINI_IMAGE_MODELS, {"default": "google/gemini-3.1-flash-image-preview"}),
+                "response_modalities": (IMAGE_RESPONSE_MODALITIES, {"default": "IMAGE+TEXT"}),
+                "aspect_ratio": (EXTENDED_ASPECT_RATIOS, {"default": "auto"}),
+                "image_size": (GEMINI_IMAGE_SIZES, {"default": "auto"}),
+                "max_tokens": (
+                    "INT",
+                    {"default": 4096, "min": 16, "max": 128000, "step": 1},
+                ),
+                "temperature": (
+                    "FLOAT",
+                    {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.01},
+                ),
+                "top_p": (
+                    "FLOAT",
+                    {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01},
+                ),
+                "reasoning_effort": (REASONING_EFFORTS, {"default": "none"}),
+                "seed": (
+                    "INT",
+                    {
+                        "default": 0,
+                        "min": 0,
+                        "max": 2147483647,
+                        "step": 1,
+                        "control_after_generate": True,
+                    },
+                ),
+                **_api_runtime_inputs(),
+            },
+            "optional": optional,
+        }
+
+    RETURN_TYPES = ("IMAGE", "STRING", "STRING")
+    RETURN_NAMES = ("image", "text", "response_id")
+    CATEGORY = IMAGE_CATEGORY
+
+    async def generate(
+        self,
+        prompt,
+        api_key,
+        model,
+        response_modalities,
+        aspect_ratio,
+        image_size,
+        max_tokens,
+        temperature,
+        top_p,
+        reasoning_effort,
+        seed,
+        base_url,
+        timeout_seconds,
+        verify_ssl,
+        system_prompt="",
+        extra_body_json="",
+        **kwargs,
+    ):
+        options = {
+            "modalities": ["image"] if response_modalities == "IMAGE" else ["image", "text"],
+            "max_tokens": int(max_tokens),
+        }
+        _add_image_config(options, model, aspect_ratio, image_size)
+        if float(temperature) != 1.0:
+            options["temperature"] = float(temperature)
+        if float(top_p) != 1.0:
+            options["top_p"] = float(top_p)
+        if int(seed) > 0:
+            options["seed"] = int(seed)
+        _add_reasoning(options, reasoning_effort)
+
+        images = _collect_numbered_images(kwargs, MAX_IMAGE_NODE_INPUTS)
+        return await self._image_request(
+            prompt,
+            api_key,
+            model,
+            options,
+            system_prompt=system_prompt,
+            extra_body_json=extra_body_json,
+            images=images,
+            base_url=base_url,
+            timeout_seconds=timeout_seconds,
+            verify_ssl=verify_ssl,
+        )
+
+
+__all__ = [
+    "WuddOpenRouterGPTText",
+    "WuddOpenRouterClaudeText",
+    "WuddOpenRouterGeminiText",
+    "WuddOpenRouterGPTImage",
+    "WuddOpenRouterGeminiImage",
+]
