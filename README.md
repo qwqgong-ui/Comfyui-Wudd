@@ -267,6 +267,18 @@ Outputs:
 - `text`
 - `response_id`
 
+## Release Notes
+
+### 2026-05-28
+
+- Added Chinese locale files for ComfyUI node definitions and UI strings.
+- Added OpenRouter-compatible GPT, Claude, and Gemini text nodes plus GPT and Gemini image nodes.
+- Added `Wudd Video Fast Forward` for multiplier-based or target-duration video speed changes.
+- Expanded video output support with AV1/H.265 CPU encoding plus NVIDIA NVENC, Intel Quick Sync, and AMD AMF encoder options.
+- Updated `Wudd Concat Videos` to return MP4 output for better downstream and Topaz compatibility.
+- Added backup caching for image saves and concatenated video intermediates/outputs.
+- Simplified `Wudd Save Video` audio handling by removing the separate audio bitrate UI and preserving source audio settings where appropriate.
+
 ## Notes
 
 - PNG image saves include metadata for workflow restoration.
