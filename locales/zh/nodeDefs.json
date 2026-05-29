@@ -370,6 +370,19 @@
       "0": { "name": "路径" }
     }
   },
+  "WuddGroupSwitch": {
+    "display_name": "Wudd 组开关",
+    "description": "自动列出画布上的分组，并用一个节点开启或关闭多个组内节点运行。",
+    "inputs": {
+      "enabled": { "name": "全部启用", "tooltip": "总开关。组名留空时会同时设置节点里列出的所有画布组；填写组名时只控制该组。" },
+      "group_name": { "name": "单组目标", "tooltip": "留空时显示并控制所有画布组；填 self/current/auto 时控制此节点所在组；也可填写精确组标题。" },
+      "off_mode": { "name": "关闭方式", "tooltip": "mute=设为 Never，不运行；bypass=设为 Bypass。" }
+    },
+    "outputs": {
+      "0": { "name": "启用" },
+      "1": { "name": "组名" }
+    }
+  },
   "WuddVideoAudioExtractor": {
     "display_name": "Wudd 从视频提取音频",
     "description": "从 VIDEO 输入中提取 AUDIO，并输出采样率和时长。",

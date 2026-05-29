@@ -7,8 +7,9 @@ ComfyUI-Wudd — 节点注册入口。
     nodes_text.py    文本类节点（TextSplitter / MultiTextSplitter / PathJoiner）
     nodes_audio.py   音频类节点（VideoAudioExtractor / ReplaceVideoAudio）
     nodes_video.py   视频类节点（SaveVideo / FastForwardVideo / ConcatVideos）
+    nodes_group.py   画布组控制节点（GroupSwitch）
     nodes_api.py     OpenRouter API 节点（GPT / Claude / Gemini 文本，GPT / Gemini 图像）
-前端动态端口脚本位于 ./web/dynamic_ports.js，由 WEB_DIRECTORY 告知 ComfyUI 加载。
+前端脚本位于 ./web/，由 WEB_DIRECTORY 告知 ComfyUI 加载。
 """
 
 from .nodes_image import (
@@ -26,6 +27,7 @@ from .nodes_text import (
 )
 from .nodes_audio import WuddVideoAudioExtractor, WuddReplaceVideoAudio
 from .nodes_video import WuddSaveVideo, WuddFastForwardVideo, WuddConcatVideos
+from .nodes_group import WuddGroupSwitch
 from .nodes_api import (
     WuddOpenRouterGPTText,
     WuddOpenRouterClaudeText,
@@ -55,6 +57,7 @@ NODE_CLASS_MAPPINGS = {
     "WuddOpenRouterGeminiText": WuddOpenRouterGeminiText,
     "WuddOpenRouterGPTImage": WuddOpenRouterGPTImage,
     "WuddOpenRouterGeminiImage": WuddOpenRouterGeminiImage,
+    "WuddGroupSwitch": WuddGroupSwitch,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -77,6 +80,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WuddOpenRouterGeminiText": "Wudd OpenRouter Gemini Text",
     "WuddOpenRouterGPTImage": "Wudd OpenRouter GPT Image",
     "WuddOpenRouterGeminiImage": "Wudd OpenRouter Gemini Image",
+    "WuddGroupSwitch": "Wudd Group Switch",
 }
 
 # 告诉 ComfyUI 加载当前目录下的 web 文件夹中的前端脚本

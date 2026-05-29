@@ -207,6 +207,18 @@ Join up to 5 path segments with `/`.
 - Ignores blank segments.
 - Useful for building portable path-like prompt strings or API inputs.
 
+### Wudd Group Switch
+
+Enable or disable all nodes inside a ComfyUI canvas group from one switch node.
+
+- Leave `group_name` empty to automatically add toggles for every canvas group.
+- Set `group_name` to `self`, `current`, or `auto` to control only the group containing this node.
+- Or fill `group_name` with an exact group title; the node also has right-click menu helpers for choosing a target group.
+- `enabled` sets all listed groups on or off when `group_name` is empty.
+- Each generated group toggle can independently turn one canvas group on or off.
+- `off_mode`: `mute` sets group nodes to Never so they do not run; `bypass` sets them to Bypass.
+- Other `Wudd Group Switch` nodes inside the group stay active so a switch placed inside its own group can re-enable it.
+
 ### Wudd Extract Audio From Video
 
 Extract audio directly from a `VIDEO` input.
