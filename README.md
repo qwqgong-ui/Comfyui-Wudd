@@ -54,7 +54,13 @@ If you need an offline/local override, place the Windows ffmpeg executables in t
 - `bin/ffprobe.exe`
 - `bin/ffplay.exe`
 
-The node uses `bin/ffmpeg.exe` only when all three files exist. The `bin/` folder is kept in Git with `.gitkeep`, while copied executables are ignored by `.gitignore` and should not be committed. If the local `bin/` set is missing or incomplete, the node falls back to `imageio-ffmpeg`, then to `ffmpeg` on `PATH`.
+On Linux, place the no-extension executables in the same folder:
+
+- `bin/ffmpeg`
+- `bin/ffprobe`
+- `bin/ffplay`
+
+The node uses the local `bin/` ffmpeg set only when all three platform executables exist. The `bin/` folder is kept in Git with `.gitkeep`, while copied executables are ignored by `.gitignore` and should not be committed. If the local `bin/` set is missing or incomplete, the node falls back to `imageio-ffmpeg`, then to `ffmpeg` on `PATH`.
 
 To refresh the local Windows ffmpeg override, run:
 
@@ -62,11 +68,25 @@ To refresh the local Windows ffmpeg override, run:
 powershell -ExecutionPolicy Bypass -File .\scripts\update_ffmpeg.ps1
 ```
 
-The script downloads BtbN's latest Windows x64 GPL autobuild by default, extracts `ffmpeg.exe`, `ffprobe.exe`, and `ffplay.exe`, and places them in `bin/`. The executables remain ignored by Git.
+To refresh the local Linux ffmpeg override, run:
+
+```bash
+bash scripts/update_ffmpeg_linux.sh
+```
+
+The scripts download BtbN's latest x64 GPL autobuild by default, extract the three ffmpeg executables, and place them in `bin/`. The executables remain ignored by Git.
+
+For Linux Jpegli support, run:
+
+```bash
+bash scripts/update_jpegli_linux.sh
+```
+
+This downloads the newest available `jxl-linux-x86_64-static` release asset from `libjxl/libjxl` and places `cjpegli` in `bin/`. The image save node checks `bin/cjpegli`, then the bundled Windows Jpegli tools, then `cjpegli` on `PATH`.
 
 ## Nodes
 
-All nodes are registered under `Wudd Nodes`.
+All V3 nodes are registered under `Wudd Nodes V3`.
 
 ### Wudd Multi Save
 
