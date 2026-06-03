@@ -1,26 +1,37 @@
-# ComfyUI-Wudd
+# ComfyUI-Wudd-V3
+
+V3 adapter build of ComfyUI-Wudd. This folder is intended to live beside the
+original `ComfyUI-Wudd` V1 package without replacing it.
+
+- Python nodes use V3 `comfy_entrypoint`.
+- Node ids are prefixed as `WuddV3...` so existing V1 workflows keep using the
+  original `Wudd...` nodes.
+- The V3 wrappers call the existing V1 implementation classes to keep behavior
+  aligned during migration.
 
 Custom nodes for [ComfyUI](https://github.com/comfyanonymous/ComfyUI), focused on practical image, text, audio/video, path, and API utility workflows.
 
 ## Installation
 
-Clone this repository into `ComfyUI/custom_nodes/`:
+Place this folder in `ComfyUI/custom_nodes/`:
 
 ```bash
 cd ComfyUI/custom_nodes
-git clone https://github.com/qwqgong-ui/Comfyui-Wudd.git
+# keep both folders when testing V3 side by side:
+# ComfyUI-Wudd
+# ComfyUI-Wudd-V3
 ```
 
 Install dependencies with the Python environment used by ComfyUI:
 
 ```bash
-python -m pip install -r Comfyui-Wudd/requirements.txt
+python -m pip install -r ComfyUI-Wudd-V3/requirements.txt
 ```
 
 For the ComfyUI Windows portable build, use its embedded Python:
 
 ```powershell
-C:\path\to\ComfyUI\python_embeded\python.exe -m pip install -r C:\path\to\ComfyUI\ComfyUI\custom_nodes\Comfyui-Wudd\requirements.txt
+C:\path\to\ComfyUI\python_embeded\python.exe -m pip install -r C:\path\to\ComfyUI\ComfyUI\custom_nodes\ComfyUI-Wudd-V3\requirements.txt
 ```
 
 Restart ComfyUI after installation.

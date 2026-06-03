@@ -140,9 +140,9 @@ app.registerExtension({
     async beforeRegisterNodeDef(nodeType, nodeData) {
 
         // ==========================================
-        // WuddMultiSaveImage — 动态输入端口
+        // WuddV3MultiSaveImage — 动态输入端口
         // ==========================================
-        if (nodeData.name === "WuddMultiSaveImage") {
+        if (nodeData.name === "WuddV3MultiSaveImage") {
 
             const onConnectionsChange = nodeType.prototype.onConnectionsChange;
             nodeType.prototype.onConnectionsChange = function (type, index, connected, link_info) {
@@ -237,9 +237,9 @@ app.registerExtension({
         }
 
         // ==========================================
-        // Wudd video nodes — 动态输入端口
+        // Wudd V3 video nodes — 动态输入端口
         // ==========================================
-        if (nodeData.name === "WuddSaveVideo" || nodeData.name === "WuddConcatVideos") {
+        if (nodeData.name === "WuddV3SaveVideo" || nodeData.name === "WuddV3ConcatVideos") {
 
             const onConnectionsChange = nodeType.prototype.onConnectionsChange;
             nodeType.prototype.onConnectionsChange = function (type, index, connected, link_info) {
@@ -282,7 +282,7 @@ app.registerExtension({
                 this.__isUpdatingPorts = false;
             };
 
-            const COMBO_DEFAULTS = nodeData.name === "WuddSaveVideo" ? {
+            const COMBO_DEFAULTS = nodeData.name === "WuddV3SaveVideo" ? {
                 save_mode:  { valid: ["append", "overwrite"], def: "append" },
                 codec:      { valid: ["av1", "h265"],         def: "av1"    },
                 encoder:    { valid: ["cpu", "nvidia", "intel", "amd"], def: "cpu" },
@@ -309,9 +309,9 @@ app.registerExtension({
         }
 
         // ==========================================
-        // WuddMultiTextSplitter — 动态输出端口
+        // WuddV3MultiTextSplitter — 动态输出端口
         // ==========================================
-        if (nodeData.name === "WuddMultiTextSplitter") {
+        if (nodeData.name === "WuddV3MultiTextSplitter") {
             const applyOutputCount = node => {
                 const countWidget = node.widgets?.find(w => w.name === "count");
                 if (countWidget) {
@@ -343,9 +343,9 @@ app.registerExtension({
         }
 
         // ==========================================
-        // WuddImageListImporter — 动态输入与输出
+        // WuddV3ImageListImporter — 动态输入与输出
         // ==========================================
-        if (nodeData.name === "WuddImageListImporter") {
+        if (nodeData.name === "WuddV3ImageListImporter") {
             function applyImageCount(node) {
                 const countWidget = node.widgets?.find(w => w.name === "image_count");
                 if (!countWidget) return;
@@ -417,9 +417,9 @@ app.registerExtension({
         }
 
         // ==========================================
-        // WuddImageStitch — 按数量刷新输入端口
+        // WuddV3ImageStitch — 按数量刷新输入端口
         // ==========================================
-        if (nodeData.name === "WuddImageStitch") {
+        if (nodeData.name === "WuddV3ImageStitch") {
             const applyStitchInputCount = node => {
                 const countWidget = node.widgets?.find(w => w.name === "input_count");
                 if (countWidget) {

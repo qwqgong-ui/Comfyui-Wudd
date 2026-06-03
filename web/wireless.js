@@ -1,8 +1,8 @@
 import { app } from "../../scripts/app.js";
 
-const CATEGORY = "Wudd Nodes/Wireless";
-const SENDER_NODE_TYPE = "WuddWirelessInput";
-const RECEIVER_NODE_TYPE = "WuddWirelessOutput";
+const CATEGORY = "Wudd Nodes V3/Wireless";
+const SENDER_NODE_TYPE = "WuddV3WirelessInput";
+const RECEIVER_NODE_TYPE = "WuddV3WirelessOutput";
 const DEFAULT_NAMESPACE = "main";
 const DEFAULT_COUNT = 1;
 const MAX_CHANNELS = 32;
@@ -124,7 +124,7 @@ function setChannels(node, channels) {
 }
 
 function updateTitle(node) {
-    const prefix = node.type === SENDER_NODE_TYPE ? "Wireless Input" : "Wireless Output";
+    const prefix = node.type === SENDER_NODE_TYPE ? "Wireless V3 Input" : "Wireless V3 Output";
     node.title = `${prefix} [${getNamespace(node)}]`;
 }
 
@@ -316,7 +316,7 @@ class WuddWirelessBase extends LiteGraph.LGraphNode {
 }
 
 class WuddWirelessInput extends WuddWirelessBase {
-    static title = "Wudd Wireless Input";
+    static title = "Wudd V3 Wireless Input";
     static category = CATEGORY;
 
     constructor(title = WuddWirelessInput.title) {
@@ -415,7 +415,7 @@ class WuddWirelessInput extends WuddWirelessBase {
 }
 
 class WuddWirelessOutput extends WuddWirelessBase {
-    static title = "Wudd Wireless Output";
+    static title = "Wudd V3 Wireless Output";
     static category = CATEGORY;
 
     constructor(title = WuddWirelessOutput.title) {

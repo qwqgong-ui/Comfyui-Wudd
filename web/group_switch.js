@@ -3,7 +3,7 @@ import { app } from "../../scripts/app.js";
 const MODE_ALWAYS = 0;
 const MODE_NEVER = 2;
 const MODE_BYPASS = 4;
-const GROUP_SWITCH_CLASS = "WuddGroupSwitch";
+const GROUP_SWITCH_CLASS = "WuddV3GroupSwitch";
 const AUTO_GROUP_NAMES = new Set(["auto", "current", "self"]);
 const GROUP_STATES_PROPERTY = "group_states";
 
