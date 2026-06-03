@@ -9,7 +9,7 @@ ComfyUI-Wudd — 节点注册入口。
     nodes_video.py   视频类节点（SaveVideo / FastForwardVideo / ConcatVideos）
     nodes_group.py   画布组控制节点（GroupSwitch）
     nodes_api.py     OpenRouter API 节点（GPT / Claude / Gemini 文本，GPT / Gemini 图像）
-前端脚本位于 ./web/，由 WEB_DIRECTORY 告知 ComfyUI 加载。
+前端脚本位于 ./web/，由 WEB_DIRECTORY 告知 ComfyUI 加载；无线连接节点为前端虚拟节点。
 """
 
 from .nodes_image import (
@@ -23,6 +23,7 @@ from .nodes_image import (
 from .nodes_text import (
     WuddTextSplitter,
     WuddMultiTextSplitter,
+    WuddPromptListFromText,
     WuddPathJoiner,
 )
 from .nodes_audio import WuddVideoAudioExtractor, WuddReplaceVideoAudio
@@ -44,6 +45,7 @@ NODE_CLASS_MAPPINGS = {
     "WuddConcatVideos": WuddConcatVideos,
     "WuddTextSplitter": WuddTextSplitter,
     "WuddMultiTextSplitter": WuddMultiTextSplitter,
+    "WuddPromptListFromText": WuddPromptListFromText,
     "WuddDropAlpha": WuddDropAlpha,
     "WuddImageExpand": WuddImageExpand,
     "WuddEdgePad": WuddEdgePad,
@@ -67,6 +69,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WuddConcatVideos": "Wudd Concat Videos",
     "WuddTextSplitter": "Wudd Text Splitter",
     "WuddMultiTextSplitter": "Wudd Multi Text Splitter",
+    "WuddPromptListFromText": "Wudd Prompt List From Text",
     "WuddDropAlpha": "Wudd Drop Alpha",
     "WuddImageExpand": "Wudd Image Expand",
     "WuddEdgePad": "Wudd Edge Pad",

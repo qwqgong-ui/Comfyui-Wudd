@@ -4,8 +4,11 @@ ComfyUI-Wudd — 文本类节点。
 包含：
     WuddTextSplitter        按行切分多行文本，取第 index 行
     WuddMultiTextSplitter   多行文本一次分到 16 个输出（动态按 count 显示）
+    WuddPromptListFromText  多行提示词转为 ComfyUI 列表，供下游节点按行批量执行
     WuddPathJoiner          用 `/` 串联最多 5 段路径片段
 """
+
+import re
 
 from .nodes_common import WUDD_CATEGORY
 
@@ -63,6 +66,49 @@ class WuddMultiTextSplitter:
             lines[i] if i < max_count and i < len(lines) else ""
             for i in range(self.MAX_OUTPUTS)
         )
+
+
+class WuddPromptListFromText:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "text": ("STRING", {"multiline": True, "default": ""}),
+                "skip_empty": ("BOOLEAN", {"default": True}),
+                "strip_numbering": ("BOOLEAN", {"default": True}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "INT")
+    RETURN_NAMES = ("prompts", "count")
+    OUTPUT_IS_LIST = (True, False)
+    FUNCTION = "to_list"
+    CATEGORY = WUDD_CATEGORY
+
+    _NUMBERING_RE = re.compile(
+        r"^\s*(?:[-*]\s+|(?:第\s*)?\d+\s*(?:页|[.、:：)\-])\s*|page\s*\d+\s*[:：.)-]?\s*)",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _clean_line(cls, line, strip_numbering):
+        line = line.strip()
+        if strip_numbering:
+            line = cls._NUMBERING_RE.sub("", line).strip()
+        return line
+
+    def to_list(self, text, skip_empty=True, strip_numbering=True):
+        prompts = []
+        for raw_line in text.splitlines():
+            line = self._clean_line(raw_line, strip_numbering)
+            if line in {"```", "```text", "```markdown"}:
+                continue
+            if skip_empty and not line:
+                continue
+            if len(line) <= 12 and any(key in line for key in ("页数", "总页数", "提示词")):
+                continue
+            prompts.append(line)
+        return (prompts, len(prompts))
 
 
 class WuddPathJoiner:

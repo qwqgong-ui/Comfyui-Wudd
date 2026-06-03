@@ -219,6 +219,18 @@ Enable or disable all nodes inside a ComfyUI canvas group from one switch node.
 - `off_mode`: `mute` sets group nodes to Never so they do not run; `bypass` sets them to Bypass.
 - Other `Wudd Group Switch` nodes inside the group stay active so a switch placed inside its own group can re-enable it.
 
+### Wudd Wireless Input / Output
+
+Virtual wireless routing nodes for hiding long links while keeping ComfyUI's execution graph connected.
+
+- `Wudd Wireless Input` has real input slots and publishes multiple channels from one node.
+- `Wudd Wireless Output` has real output slots and exposes matching channels from one node.
+- Channels are matched by `namespace + channel name`.
+- Input channel names are auto-renamed with `_1`, `_2`, and so on when another input publisher in the same namespace already uses the name.
+- Use `Wudd: Create matching output` on an input node to create a receiver with the same namespace and channels.
+- Use `Wudd: Refresh from inputs` on an output node to rebuild its channel list from existing input nodes.
+- The nodes are frontend virtual nodes; they resolve to the original upstream links when ComfyUI builds the prompt.
+
 ### Wudd Extract Audio From Video
 
 Extract audio directly from a `VIDEO` input.

@@ -153,15 +153,29 @@ app.registerExtension({
 
                 if (type === INPUT && this.inputs && this.inputs.length > 0) {
                     try {
-                        while (this.inputs.length > 1 &&
-                               !this.inputs[this.inputs.length - 1].link &&
-                               !this.inputs[this.inputs.length - 2].link) {
-                            this.removeInput(this.inputs.length - 1);
+                        let imageInputs = (this.inputs || [])
+                            .map((input, idx) => ({ input, idx }))
+                            .filter(item => indexedSlotNumber(item.input?.name, "image_") != null)
+                            .sort((a, b) => indexedSlotNumber(a.input.name, "image_") - indexedSlotNumber(b.input.name, "image_"));
+
+                        while (imageInputs.length > 1 &&
+                               !slotHasLink(imageInputs[imageInputs.length - 1].input) &&
+                               !slotHasLink(imageInputs[imageInputs.length - 2].input)) {
+                            const removed = imageInputs.pop();
+                            this.removeInput(removed.idx);
+                            imageInputs = (this.inputs || [])
+                                .map((input, idx) => ({ input, idx }))
+                                .filter(item => indexedSlotNumber(item.input?.name, "image_") != null)
+                                .sort((a, b) => indexedSlotNumber(a.input.name, "image_") - indexedSlotNumber(b.input.name, "image_"));
                         }
 
-                        const lastInput = this.inputs[this.inputs.length - 1];
-                        if (lastInput?.link) {
-                            this.addInput(`image_${this.inputs.length + 1}`, "IMAGE");
+                        const lastInput = imageInputs[imageInputs.length - 1]?.input;
+                        if (imageInputs.length > 0 && slotHasLink(lastInput)) {
+                            const nextIndex = Math.max(...imageInputs.map(item => indexedSlotNumber(item.input.name, "image_"))) + 1;
+                            const nextName = `image_${nextIndex}`;
+                            if (!(this.inputs || []).some(input => input.name === nextName)) {
+                                this.addInput(nextName, "IMAGE");
+                            }
                         }
                     } catch (e) {
                         console.error("Wudd Ports Error:", e);

@@ -1,6 +1,7 @@
 {
   "nodeCategories": {
     "Wudd Nodes": "Wudd 节点",
+    "Wudd Nodes/Wireless": "Wudd 节点/无线连接",
     "Wudd Nodes/OpenRouter/Text": "Wudd 节点/OpenRouter/文本",
     "Wudd Nodes/OpenRouter/Image": "Wudd 节点/OpenRouter/图像",
     "OpenRouter": "OpenRouter",
