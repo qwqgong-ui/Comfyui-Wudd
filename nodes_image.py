@@ -35,12 +35,19 @@ class WuddMultiSaveImage:
         self.output_dir = folder_paths.get_output_directory()
         self.type = "output"
         exe_name = "cjpegli.exe" if sys.platform == "win32" else "cjpegli"
-        self.cjpegli_exe = os.path.join(
-            os.path.dirname(__file__), "jxl-x64-windows-static", "bin", exe_name
+        node_dir = os.path.dirname(__file__)
+        cjpegli_candidates = [
+            os.path.join(node_dir, "bin", exe_name),
+            os.path.join(node_dir, "jxl-x64-windows-static", "bin", exe_name),
+            shutil.which(exe_name),
+        ]
+        self.cjpegli_exe = next(
+            (path for path in cjpegli_candidates if path and os.path.isfile(path)),
+            cjpegli_candidates[0],
         )
         self.cjpegli_available = os.path.isfile(self.cjpegli_exe)
         if not self.cjpegli_available:
-            print(f"[Wudd] cjpegli not found at {self.cjpegli_exe}; "
+            print(f"[Wudd] cjpegli not found in local bin, bundled tools, or PATH; "
                   f"jpegli mode will fall back to PIL JPEG.")
 
     @classmethod
