@@ -64,6 +64,8 @@ IMAGE_50_NAMES = [f"image_{i}" for i in range(1, 51)]
 IMAGE_100_NAMES = [f"image_{i}" for i in range(1, 101)]
 VIDEO_100_NAMES = [f"video_{i}" for i in range(1, 101)]
 
+_BACKEND_CACHE: dict[type, Any] = {}
+
 
 def _to_node_output(result: Any) -> IO.NodeOutput:
     if isinstance(result, IO.NodeOutput):
@@ -198,13 +200,17 @@ def _seed_input() -> IO.Int.Input:
 
 class _BackendNode:
     BACKEND_CLS: type | None = None
-    _BACKEND: Any = None
 
     @classmethod
     def _backend(cls):
-        if cls._BACKEND is None:
-            cls._BACKEND = cls.BACKEND_CLS()
-        return cls._BACKEND
+        backend_cls = cls.BACKEND_CLS
+        if backend_cls is None:
+            raise RuntimeError(f"{cls.__name__} does not define BACKEND_CLS.")
+        backend = _BACKEND_CACHE.get(backend_cls)
+        if backend is None:
+            backend = backend_cls()
+            _BACKEND_CACHE[backend_cls] = backend
+        return backend
 
     @classmethod
     async def _run_backend(cls, method_name: str, **kwargs) -> IO.NodeOutput:
