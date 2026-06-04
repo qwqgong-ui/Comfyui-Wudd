@@ -231,47 +231,57 @@ class WuddV3MultiSaveImage(_BackendNode, IO.ComfyNode):
             display_name="Wudd V3 Multi Save",
             category=WUDD_V3_CATEGORY,
             inputs=[
-                IO.Image.Input("image_1"),
+                _image_autogrow("images", IMAGE_100_NAMES, min_count=1),
+                IO.String.Input("filename_prefix", default="Wudd_Img"),
                 IO.Combo.Input("save_mode", options=["append", "overwrite"], default="append"),
-                IO.Combo.Input("extension", options=["png", "jpegli"], default="png"),
-                IO.Int.Input("quality", default=90, min=1, max=100),
-                IO.Boolean.Input("progressive", default=True),
-                IO.Boolean.Input("enable_xyb", default=False),
-                IO.Combo.Input("chroma_subsampling", options=["444", "440", "422", "420"], default="444"),
-                IO.String.Input("filename_prefix", default="Wudd_Img", optional=True),
+                IO.DynamicCombo.Input(
+                    "extension",
+                    options=[
+                        IO.DynamicCombo.Option("png", []),
+                        IO.DynamicCombo.Option(
+                            "jpegli",
+                            [
+                                IO.Int.Input("quality", default=90, min=1, max=100),
+                                IO.Boolean.Input("progressive", default=True),
+                                IO.Boolean.Input("enable_xyb", default=False),
+                                IO.Combo.Input(
+                                    "chroma_subsampling",
+                                    options=["444", "440", "422", "420"],
+                                    default="444",
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
             ],
             outputs=[],
             hidden=[IO.Hidden.prompt, IO.Hidden.extra_pnginfo],
             is_output_node=True,
-            accept_all_inputs=True,
         )
 
     @classmethod
     async def execute(
         cls,
-        image_1,
-        save_mode="append",
-        extension="png",
-        quality=90,
-        progressive=True,
-        enable_xyb=False,
-        chroma_subsampling="444",
+        images: IO.Autogrow.Type,
         filename_prefix="Wudd_Img",
-        **kwargs,
+        save_mode="append",
+        extension=None,
     ) -> IO.NodeOutput:
+        image_1, rest = _first_and_rest(images, "image_")
+        selected_extension, extension_inputs = _dynamic_value(extension, "extension", "png")
         return await cls._run_backend(
             "save_images",
             image_1=image_1,
             filename_prefix=filename_prefix,
             save_mode=save_mode,
-            extension=extension,
-            quality=quality,
-            progressive=progressive,
-            enable_xyb=enable_xyb,
-            chroma_subsampling=chroma_subsampling,
+            extension=selected_extension,
+            quality=extension_inputs.get("quality", 90),
+            progressive=extension_inputs.get("progressive", True),
+            enable_xyb=extension_inputs.get("enable_xyb", False),
+            chroma_subsampling=extension_inputs.get("chroma_subsampling", "444"),
             prompt=cls.hidden.prompt,
             extra_pnginfo=cls.hidden.extra_pnginfo,
-            **kwargs,
+            **rest,
         )
 
 
@@ -285,7 +295,8 @@ class WuddV3SaveVideo(_BackendNode, IO.ComfyNode):
             display_name="Wudd V3 Save Video",
             category=WUDD_V3_CATEGORY,
             inputs=[
-                IO.Video.Input("video_1"),
+                _video_autogrow("videos", VIDEO_100_NAMES, min_count=1),
+                IO.String.Input("filename_prefix", default="Wudd_Video"),
                 IO.Combo.Input("save_mode", options=["append", "overwrite"], default="append"),
                 IO.Combo.Input("codec", options=["av1", "h265"], default="av1"),
                 IO.Combo.Input("encoder", options=["cpu", "nvidia", "intel", "amd"], default="cpu"),
@@ -293,18 +304,17 @@ class WuddV3SaveVideo(_BackendNode, IO.ComfyNode):
                 IO.Int.Input("crf", default=28, min=0, max=51, step=1),
                 IO.Combo.Input("preset", options=["fast", "medium", "slow"], default="medium"),
                 IO.Combo.Input("audio_mode", options=["copy", "aac", "none"], default="copy"),
-                IO.String.Input("filename_prefix", default="Wudd_Video", optional=True),
             ],
             outputs=[],
             hidden=[IO.Hidden.prompt, IO.Hidden.extra_pnginfo],
             is_output_node=True,
-            accept_all_inputs=True,
         )
 
     @classmethod
     async def execute(
         cls,
-        video_1,
+        videos: IO.Autogrow.Type,
+        filename_prefix="Wudd_Video",
         save_mode="append",
         codec="av1",
         encoder="cpu",
@@ -312,9 +322,8 @@ class WuddV3SaveVideo(_BackendNode, IO.ComfyNode):
         crf=28,
         preset="medium",
         audio_mode="copy",
-        filename_prefix="Wudd_Video",
-        **kwargs,
     ) -> IO.NodeOutput:
+        video_1, rest = _first_and_rest(videos, "video_")
         return await cls._run_backend(
             "save_videos",
             video_1=video_1,
@@ -328,7 +337,7 @@ class WuddV3SaveVideo(_BackendNode, IO.ComfyNode):
             audio_mode=audio_mode,
             prompt=cls.hidden.prompt,
             extra_pnginfo=cls.hidden.extra_pnginfo,
-            **kwargs,
+            **rest,
         )
 
 
@@ -343,29 +352,49 @@ class WuddV3FastForwardVideo(_BackendNode, IO.ComfyNode):
             category=WUDD_V3_CATEGORY,
             inputs=[
                 IO.Video.Input("video"),
-                IO.Combo.Input("mode", options=["speed_multiplier", "target_seconds"], default="speed_multiplier"),
-                IO.Float.Input("speed_multiplier", default=2.0, min=0.01, max=100.0, step=0.01),
-                IO.Float.Input("target_seconds", default=5.0, min=0.001, max=86400.0, step=0.001),
+                IO.DynamicCombo.Input(
+                    "mode",
+                    options=[
+                        IO.DynamicCombo.Option(
+                            "speed_multiplier",
+                            [
+                                IO.Float.Input(
+                                    "speed_multiplier",
+                                    default=2.0,
+                                    min=0.01,
+                                    max=100.0,
+                                    step=0.01,
+                                ),
+                            ],
+                        ),
+                        IO.DynamicCombo.Option(
+                            "target_seconds",
+                            [
+                                IO.Float.Input(
+                                    "target_seconds",
+                                    default=5.0,
+                                    min=0.001,
+                                    max=86400.0,
+                                    step=0.001,
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
                 IO.Combo.Input("audio_mode", options=["keep", "none"], default="keep"),
             ],
             outputs=[IO.Video.Output("video", display_name="video")],
         )
 
     @classmethod
-    async def execute(
-        cls,
-        video,
-        mode="speed_multiplier",
-        speed_multiplier=2.0,
-        target_seconds=5.0,
-        audio_mode="keep",
-    ) -> IO.NodeOutput:
+    async def execute(cls, video, mode=None, audio_mode="keep") -> IO.NodeOutput:
+        selected_mode, mode_inputs = _dynamic_value(mode, "mode", "speed_multiplier")
         return await cls._run_backend(
             "fast_forward_video",
             video=video,
-            mode=mode,
-            speed_multiplier=speed_multiplier,
-            target_seconds=target_seconds,
+            mode=selected_mode,
+            speed_multiplier=mode_inputs.get("speed_multiplier", 2.0),
+            target_seconds=mode_inputs.get("target_seconds", 5.0),
             audio_mode=audio_mode,
         )
 
@@ -380,8 +409,7 @@ class WuddV3ConcatVideos(_BackendNode, IO.ComfyNode):
             display_name="Wudd V3 Concat Videos",
             category=WUDD_V3_CATEGORY,
             inputs=[
-                IO.Video.Input("video_1"),
-                IO.Video.Input("video_2"),
+                _video_autogrow("videos", VIDEO_100_NAMES, min_count=2),
                 IO.Combo.Input(
                     "resize_mode",
                     options=["fit_to_first", "stretch_to_first"],
@@ -390,25 +418,28 @@ class WuddV3ConcatVideos(_BackendNode, IO.ComfyNode):
                 IO.Combo.Input("audio_mode", options=["keep", "none"], default="keep"),
             ],
             outputs=[IO.Video.Output("video", display_name="video")],
-            accept_all_inputs=True,
         )
 
     @classmethod
     async def execute(
         cls,
-        video_1,
-        video_2=None,
+        videos: IO.Autogrow.Type,
         resize_mode="fit_to_first",
         audio_mode="keep",
-        **kwargs,
     ) -> IO.NodeOutput:
+        items = _numbered_items(videos, "video_")
+        if not items:
+            raise ValueError("At least one video input is required.")
+        video_1 = items[0][1]
+        video_2 = items[1][1] if len(items) > 1 else None
+        rest = {name: value for name, value in items[2:]}
         return await cls._run_backend(
             "concat_videos",
             video_1=video_1,
             video_2=video_2,
             resize_mode=resize_mode,
             audio_mode=audio_mode,
-            **kwargs,
+            **rest,
         )
 
 
@@ -612,33 +643,35 @@ class WuddV3DropAlpha(_BackendNode, IO.ComfyNode):
             category=WUDD_V3_CATEGORY,
             inputs=[
                 IO.Image.Input("image"),
-                IO.Mask.Input("mask", optional=True),
-                IO.Combo.Input("mode", options=["checkerboard", "fill_color"], default="checkerboard"),
-                IO.String.Input("fill_color", default="#808080"),
-                IO.Int.Input("tile_size", default=16, min=4, max=128, step=4),
+                IO.DynamicCombo.Input(
+                    "mode",
+                    options=[
+                        IO.DynamicCombo.Option(
+                            "checkerboard",
+                            [IO.Int.Input("tile_size", default=16, min=4, max=128, step=4)],
+                        ),
+                        IO.DynamicCombo.Option(
+                            "fill_color",
+                            [IO.String.Input("fill_color", default="#808080")],
+                        ),
+                    ],
+                ),
                 IO.Boolean.Input("auto_crop", default=False),
                 IO.Int.Input("padding", default=0, min=0, max=2048),
+                IO.Mask.Input("mask", optional=True),
             ],
             outputs=[IO.Image.Output("image", display_name="image")],
         )
 
     @classmethod
-    async def execute(
-        cls,
-        image,
-        mode="checkerboard",
-        fill_color="#808080",
-        tile_size=16,
-        auto_crop=False,
-        padding=0,
-        mask=None,
-    ) -> IO.NodeOutput:
+    async def execute(cls, image, mode=None, auto_crop=False, padding=0, mask=None) -> IO.NodeOutput:
+        selected_mode, mode_inputs = _dynamic_value(mode, "mode", "checkerboard")
         return await cls._run_backend(
             "drop_alpha",
             image=image,
-            mode=mode,
-            fill_color=fill_color,
-            tile_size=tile_size,
+            mode=selected_mode,
+            fill_color=mode_inputs.get("fill_color", "#808080"),
+            tile_size=mode_inputs.get("tile_size", 16),
             auto_crop=auto_crop,
             padding=padding,
             mask=mask,
@@ -658,9 +691,19 @@ class WuddV3ImageExpand(_BackendNode, IO.ComfyNode):
                 IO.Image.Input("image"),
                 IO.Combo.Input("direction", options=["right", "down", "left", "up"], default="right"),
                 IO.Int.Input("count", default=1, min=1, max=16, step=1),
-                IO.Combo.Input("mode", options=["checkerboard", "fill_color"], default="checkerboard"),
-                IO.String.Input("fill_color", default="#808080"),
-                IO.Int.Input("tile_size", default=16, min=4, max=128, step=4),
+                IO.DynamicCombo.Input(
+                    "mode",
+                    options=[
+                        IO.DynamicCombo.Option(
+                            "checkerboard",
+                            [IO.Int.Input("tile_size", default=16, min=4, max=128, step=4)],
+                        ),
+                        IO.DynamicCombo.Option(
+                            "fill_color",
+                            [IO.String.Input("fill_color", default="#808080")],
+                        ),
+                    ],
+                ),
             ],
             outputs=[
                 IO.Image.Output("image", display_name="image"),
@@ -670,23 +713,16 @@ class WuddV3ImageExpand(_BackendNode, IO.ComfyNode):
         )
 
     @classmethod
-    async def execute(
-        cls,
-        image,
-        direction,
-        count,
-        mode="checkerboard",
-        fill_color="#808080",
-        tile_size=16,
-    ) -> IO.NodeOutput:
+    async def execute(cls, image, direction, count, mode=None) -> IO.NodeOutput:
+        selected_mode, mode_inputs = _dynamic_value(mode, "mode", "checkerboard")
         return await cls._run_backend(
             "expand",
             image=image,
             direction=direction,
             count=count,
-            mode=mode,
-            fill_color=fill_color,
-            tile_size=tile_size,
+            mode=selected_mode,
+            fill_color=mode_inputs.get("fill_color", "#808080"),
+            tile_size=mode_inputs.get("tile_size", 16),
         )
 
 
@@ -700,7 +736,7 @@ class WuddV3EdgePad(_BackendNode, IO.ComfyNode):
             display_name="Wudd V3 Edge Pad",
             category=WUDD_V3_CATEGORY,
             inputs=[
-                IO.Image.Input("image_1"),
+                _image_autogrow("images", IMAGE_16_NAMES, min_count=1),
                 IO.Int.Input("pad_px", default=100, min=10, max=500, step=1),
                 IO.Float.Input("blend_pct", default=3.0, min=0.5, max=20.0, step=0.5),
                 IO.Float.Input("pad_sigma", default=30.0, min=1.0, max=200.0, step=1.0),
@@ -711,20 +747,19 @@ class WuddV3EdgePad(_BackendNode, IO.ComfyNode):
                 IO.Image.Output(f"image_{i}", display_name=f"image_{i}")
                 for i in range(1, WuddEdgePad.MAX_INPUTS + 1)
             ],
-            accept_all_inputs=True,
         )
 
     @classmethod
     async def execute(
         cls,
-        image_1,
+        images: IO.Autogrow.Type,
         pad_px,
         blend_pct,
         pad_sigma,
         blend_sigma,
         chamfer_pct,
-        **kwargs,
     ) -> IO.NodeOutput:
+        image_1, rest = _first_and_rest(images, "image_")
         return await cls._run_backend(
             "pad_edges",
             image_1=image_1,
@@ -733,7 +768,7 @@ class WuddV3EdgePad(_BackendNode, IO.ComfyNode):
             pad_sigma=pad_sigma,
             blend_sigma=blend_sigma,
             chamfer_pct=chamfer_pct,
-            **kwargs,
+            **rest,
         )
 
 
@@ -747,16 +782,41 @@ class WuddV3ImageListImporter(_BackendNode, IO.ComfyNode):
             display_name="Wudd V3 Image List Importer",
             category=WUDD_V3_CATEGORY,
             inputs=[
-                IO.Int.Input(
-                    "image_count",
-                    default=1,
-                    min=1,
-                    max=WuddImageListImporter.MAX_IMAGES,
-                    step=1,
+                IO.DynamicCombo.Input(
+                    "mode",
+                    options=[
+                        IO.DynamicCombo.Option(
+                            "files",
+                            [
+                                IO.Int.Input(
+                                    "image_count",
+                                    default=1,
+                                    min=1,
+                                    max=WuddImageListImporter.MAX_IMAGES,
+                                    step=1,
+                                ),
+                                *_image_file_inputs(WuddImageListImporter.MAX_IMAGES),
+                            ],
+                        ),
+                        IO.DynamicCombo.Option(
+                            "folder",
+                            [
+                                IO.Int.Input(
+                                    "image_count",
+                                    default=1,
+                                    min=1,
+                                    max=WuddImageListImporter.MAX_IMAGES,
+                                    step=1,
+                                ),
+                                IO.String.Input(
+                                    "folder_path",
+                                    default="",
+                                    multiline=False,
+                                ),
+                            ],
+                        ),
+                    ],
                 ),
-                IO.Combo.Input("mode", options=["files", "folder"], default="files"),
-                IO.String.Input("folder_path", default="", multiline=False),
-                *_image_file_inputs(WuddImageListImporter.MAX_IMAGES),
             ],
             outputs=[
                 IO.Image.Output(f"image_{i}", display_name=f"image_{i}")
@@ -765,22 +825,39 @@ class WuddV3ImageListImporter(_BackendNode, IO.ComfyNode):
         )
 
     @classmethod
-    def fingerprint_inputs(cls, image_count, mode="files", folder_path="", **kwargs):
+    def fingerprint_inputs(cls, mode=None, **kwargs):
+        selected_mode, mode_inputs = _dynamic_value(mode, "mode", "files")
+        params = {**mode_inputs, **kwargs}
+        image_count = params.get("image_count", 1)
+        folder_path = params.get("folder_path", "")
+        image_kwargs = {
+            key: value
+            for key, value in params.items()
+            if _is_numbered_name(key, "image_")
+        }
         return cls.BACKEND_CLS.IS_CHANGED(
             image_count,
-            mode=mode,
+            mode=selected_mode,
             folder_path=folder_path,
-            **kwargs,
+            **image_kwargs,
         )
 
     @classmethod
-    async def execute(cls, image_count, mode="files", folder_path="", **kwargs) -> IO.NodeOutput:
+    async def execute(cls, mode=None) -> IO.NodeOutput:
+        selected_mode, mode_inputs = _dynamic_value(mode, "mode", "files")
+        image_count = mode_inputs.get("image_count", 1)
+        folder_path = mode_inputs.get("folder_path", "")
+        image_kwargs = {
+            key: value
+            for key, value in mode_inputs.items()
+            if _is_numbered_name(key, "image_")
+        }
         return await cls._run_backend(
             "import_images",
             image_count=image_count,
-            mode=mode,
+            mode=selected_mode,
             folder_path=folder_path,
-            **kwargs,
+            **image_kwargs,
         )
 
 
@@ -794,31 +871,27 @@ class WuddV3ImageStitch(_BackendNode, IO.ComfyNode):
             display_name="Wudd V3 Image Stitch",
             category=WUDD_V3_CATEGORY,
             inputs=[
-                IO.Image.Input("image_1"),
+                _image_autogrow("images", IMAGE_16_NAMES, min_count=1),
                 IO.Combo.Input("direction", options=["right", "down", "left", "up"], default="right"),
                 IO.Int.Input("gap", default=0, min=0, max=256, step=1),
-                IO.Int.Input("input_count", default=2, min=1, max=WuddImageStitch.MAX_INPUTS, step=1),
             ],
             outputs=[IO.Image.Output("image", display_name="image")],
-            accept_all_inputs=True,
         )
 
     @classmethod
-    async def execute(
-        cls,
-        image_1,
-        direction="right",
-        gap=0,
-        input_count=2,
-        **kwargs,
-    ) -> IO.NodeOutput:
+    async def execute(cls, images: IO.Autogrow.Type, direction="right", gap=0) -> IO.NodeOutput:
+        items = _numbered_items(images, "image_")
+        if not items:
+            raise ValueError("At least one image input is required.")
+        image_1 = items[0][1]
+        rest = {name: value for name, value in items[1:]}
         return await cls._run_backend(
             "stitch",
             image_1=image_1,
             direction=direction,
             gap=gap,
-            input_count=input_count,
-            **kwargs,
+            input_count=len(items),
+            **rest,
         )
 
 
