@@ -520,7 +520,7 @@ class WuddWirelessOutput extends WuddWirelessBase {
 }
 
 app.registerExtension({
-    name: "Wudd.Wireless",
+    name: "WuddV3.Wireless",
     setup() {
         installCrossGraphPatch();
     },

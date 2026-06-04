@@ -328,7 +328,7 @@ function applyAllGroupSwitchNodes() {
 
 function patchGroupSwitchQueuePrompt() {
     if (typeof app.queuePrompt !== "function" ||
-        app.queuePrompt === app.__wuddGroupSwitchWrappedQueuePrompt) {
+        app.queuePrompt === app.__wuddV3GroupSwitchWrappedQueuePrompt) {
         return;
     }
 
@@ -338,7 +338,7 @@ function patchGroupSwitchQueuePrompt() {
         return await originalQueuePrompt.apply(this, arguments);
     };
     app.queuePrompt = wrappedQueuePrompt;
-    app.__wuddGroupSwitchWrappedQueuePrompt = wrappedQueuePrompt;
+    app.__wuddV3GroupSwitchWrappedQueuePrompt = wrappedQueuePrompt;
 }
 
 function wrapCoreWidget(node, widgetName) {
@@ -388,7 +388,7 @@ function maybeRefreshGroupWidgets(node) {
 }
 
 app.registerExtension({
-    name: "Wudd.GroupSwitch",
+    name: "WuddV3.GroupSwitch",
     setup() {
         patchGroupSwitchQueuePrompt();
     },
