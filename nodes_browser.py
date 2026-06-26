@@ -8,6 +8,7 @@ logged in inside the browser profile used by the node.
 
 import asyncio
 import base64
+import contextlib
 import hashlib
 import json
 import os
@@ -28,6 +29,11 @@ import folder_paths
 from PIL import Image
 
 from .nodes_common import CREATE_NO_WINDOW, WUDD_CATEGORY, tensor_to_pil
+
+try:
+    import comfy.model_management as comfy_model_management
+except Exception:
+    comfy_model_management = None
 
 
 BROWSER_CATEGORY = f"{WUDD_CATEGORY}/Browser"
@@ -147,6 +153,29 @@ STREAMING_SCRIPT = """
       label.includes("停止") ||
       label.includes("cancel response");
   });
+}
+"""
+
+STOP_RESPONSE_SCRIPT = """
+() => {
+  const buttons = Array.from(document.querySelectorAll("button"));
+  for (const button of buttons.reverse()) {
+    const label = (
+      button.getAttribute("aria-label") ||
+      button.getAttribute("title") ||
+      button.innerText ||
+      ""
+    ).toLowerCase();
+    if (
+      label.includes("stop") ||
+      label.includes("停止") ||
+      label.includes("cancel response")
+    ) {
+      button.click();
+      return true;
+    }
+  }
+  return false;
 }
 """
 
@@ -369,6 +398,39 @@ def _normalize_parallel_pages(value):
         return 2
 
 
+def _check_interrupted():
+    if comfy_model_management is not None:
+        comfy_model_management.throw_exception_if_processing_interrupted()
+
+
+async def _sleep_interruptible(seconds, interval=0.25):
+    deadline = time.monotonic() + max(0.0, float(seconds))
+    while True:
+        _check_interrupted()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        await asyncio.sleep(min(float(interval), remaining))
+
+
+async def _await_interruptible(awaitable, interval=0.25):
+    task = asyncio.ensure_future(awaitable)
+    try:
+        while not task.done():
+            _check_interrupted()
+            done, _ = await asyncio.wait({task}, timeout=float(interval))
+            if done:
+                break
+        _check_interrupted()
+        return await task
+    except BaseException:
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(BaseException):
+                await task
+        raise
+
+
 def _normalize_url(url, default):
     url = str(url or "").strip() or default
     if not url.startswith(("http://", "https://")):
@@ -413,6 +475,7 @@ def _is_cdp_ready(cdp_url):
 def _wait_for_cdp(cdp_url, timeout_seconds):
     deadline = time.monotonic() + max(1.0, float(timeout_seconds))
     while time.monotonic() < deadline:
+        _check_interrupted()
         if _is_cdp_ready(cdp_url):
             return
         time.sleep(0.25)
@@ -618,6 +681,7 @@ async def _first_visible_locator(page, selectors, timeout_seconds):
     deadline = time.monotonic() + max(1.0, float(timeout_seconds))
     last_error = None
     while time.monotonic() < deadline:
+        _check_interrupted()
         for selector in selectors:
             try:
                 locator = page.locator(selector)
@@ -628,7 +692,7 @@ async def _first_visible_locator(page, selectors, timeout_seconds):
                         return candidate
             except Exception as exc:
                 last_error = exc
-        await asyncio.sleep(0.4)
+        await _sleep_interruptible(0.4)
     if last_error:
         raise TimeoutError(f"Timed out finding ChatGPT composer: {last_error}") from last_error
     raise TimeoutError("Timed out finding ChatGPT composer. Log in to ChatGPT in the opened browser.")
@@ -1165,6 +1229,7 @@ async def _wait_for_response_images(
     not_streaming_since = None
 
     while True:
+        _check_interrupted()
         images = await _collect_response_images(page, collector, min(5.0, float(timeout_seconds)))
         if images:
             return images
@@ -1182,7 +1247,7 @@ async def _wait_for_response_images(
                 elif now - not_streaming_since >= 5.0:
                     break
 
-        await asyncio.sleep(0.75)
+        await _sleep_interruptible(0.75)
 
     if collector is not None:
         await collector.drain(2.0)
@@ -1196,12 +1261,21 @@ async def _is_streaming(page):
         return False
 
 
+async def _try_stop_response(page):
+    try:
+        await asyncio.wait_for(page.evaluate(STOP_RESPONSE_SCRIPT), timeout=3.0)
+    except Exception:
+        pass
+
+
 async def _attach_image_file(page, file_path, timeout_seconds):
     timeout_ms = max(1000, int(float(timeout_seconds) * 1000))
     file_inputs = page.locator('input[type="file"]')
     try:
         if await file_inputs.count() > 0:
-            await file_inputs.first.set_input_files(file_path, timeout=timeout_ms)
+            await _await_interruptible(
+                file_inputs.first.set_input_files(file_path, timeout=timeout_ms),
+            )
             return
     except Exception:
         pass
@@ -1212,14 +1286,16 @@ async def _attach_image_file(page, file_path, timeout_seconds):
             if await button.count() == 0 or not await button.is_visible():
                 continue
             async with page.expect_file_chooser(timeout=timeout_ms) as file_chooser_info:
-                await button.click(timeout=timeout_ms)
+                await _await_interruptible(button.click(timeout=timeout_ms))
             file_chooser = await file_chooser_info.value
             await file_chooser.set_files(file_path)
             return
         except Exception:
             try:
                 if await file_inputs.count() > 0:
-                    await file_inputs.first.set_input_files(file_path, timeout=timeout_ms)
+                    await _await_interruptible(
+                        file_inputs.first.set_input_files(file_path, timeout=timeout_ms),
+                    )
                     return
             except Exception:
                 pass
@@ -1228,35 +1304,36 @@ async def _attach_image_file(page, file_path, timeout_seconds):
 
 
 async def _fill_composer(composer, page, prompt):
-    await composer.click()
+    await _await_interruptible(composer.click())
     try:
-        await composer.fill("")
+        await _await_interruptible(composer.fill(""))
     except Exception:
         modifier = "Meta" if sys.platform == "darwin" else "Control"
-        await page.keyboard.press(f"{modifier}+A")
-        await page.keyboard.press("Backspace")
+        await _await_interruptible(page.keyboard.press(f"{modifier}+A"))
+        await _await_interruptible(page.keyboard.press("Backspace"))
 
     if prompt:
         try:
-            await composer.fill(prompt)
+            await _await_interruptible(composer.fill(prompt))
         except Exception:
-            await page.keyboard.insert_text(prompt)
+            await _await_interruptible(page.keyboard.insert_text(prompt))
 
 
 async def _click_send_button(page, timeout_seconds, required=True):
     deadline = time.monotonic() + max(1.0, float(timeout_seconds))
     while time.monotonic() < deadline:
+        _check_interrupted()
         for selector in SEND_BUTTON_SELECTORS:
             try:
                 button = page.locator(selector).last
                 if await button.count() == 0:
                     continue
                 if await button.is_visible() and await button.is_enabled():
-                    await button.click()
+                    await _await_interruptible(button.click())
                     return True
             except Exception:
                 pass
-        await asyncio.sleep(0.25)
+        await _sleep_interruptible(0.25)
     if required:
         raise TimeoutError("Timed out finding an enabled ChatGPT send button.")
     return False
@@ -1275,6 +1352,7 @@ async def _wait_for_response(page, previous_count, timeout_seconds, stable_secon
     started = False
 
     while time.monotonic() < deadline:
+        _check_interrupted()
         texts = await _assistant_texts(page)
         current = ""
         if len(texts) > previous_count:
@@ -1291,7 +1369,7 @@ async def _wait_for_response(page, previous_count, timeout_seconds, stable_secon
         if last_text and started and not streaming and time.monotonic() - last_change >= stable_seconds:
             return last_text
 
-        await asyncio.sleep(0.5)
+        await _sleep_interruptible(0.5)
 
     if last_text:
         return last_text
@@ -1308,6 +1386,7 @@ async def _wait_for_response_result(page, collector, previous_count, timeout_sec
     text_ready = False
 
     while time.monotonic() < deadline:
+        _check_interrupted()
         images = await _collect_response_images(page, collector, min(3.0, float(timeout_seconds)))
         if images:
             return last_text, images
@@ -1338,7 +1417,7 @@ async def _wait_for_response_result(page, collector, previous_count, timeout_sec
                 return last_text, images
             text_ready = True
 
-        await asyncio.sleep(0.5 if not text_ready else 1.0)
+        await _sleep_interruptible(0.5 if not text_ready else 1.0)
 
     images = await _collect_response_images(page, collector, min(5.0, float(timeout_seconds)))
     if images or last_text:
@@ -1350,14 +1429,18 @@ async def _goto_chatgpt(page, chatgpt_url):
     last_error = None
     for wait_until in ("domcontentloaded", "commit"):
         try:
-            await page.goto(chatgpt_url, wait_until=wait_until, timeout=60000)
+            _check_interrupted()
+            await _await_interruptible(
+                page.goto(chatgpt_url, wait_until=wait_until, timeout=30000),
+                interval=0.25,
+            )
             return
         except Exception as exc:
             last_error = exc
             message = str(exc)
             if "ERR_ABORTED" in message and _is_chatgpt_page_url(page.url):
                 return
-            await asyncio.sleep(0.75)
+            await _sleep_interruptible(0.75)
     if last_error is not None:
         raise last_error
 
@@ -1400,6 +1483,7 @@ async def _acquire_chatgpt_page(context, chatgpt_url, new_chat, parallel_pages):
     lock = _browser_page_pool_lock()
 
     while True:
+        _check_interrupted()
         async with lock:
             slot_pages = []
             reusable_pages = []
@@ -1417,22 +1501,26 @@ async def _acquire_chatgpt_page(context, chatgpt_url, new_chat, parallel_pages):
                 if _is_reusable_unnamed_chatgpt_page(page.url, chatgpt_url):
                     reusable_pages.append(page)
 
-            for slot, page in reversed(slot_pages):
-                if slot not in _LEASED_CHATGPT_PAGE_SLOTS:
+            valid_slots = {slot for slot, _ in slot_pages}
+            _LEASED_CHATGPT_PAGE_SLOTS.intersection_update(valid_slots)
+
+            if len(_LEASED_CHATGPT_PAGE_SLOTS) < max_pages:
+                for slot, page in reversed(slot_pages):
+                    if slot not in _LEASED_CHATGPT_PAGE_SLOTS:
+                        _LEASED_CHATGPT_PAGE_SLOTS.add(slot)
+                        return page, slot
+
+                if len(slot_pages) < max_pages:
+                    if reusable_pages:
+                        page = reusable_pages[-1]
+                    else:
+                        page = await context.new_page()
+                    slot = _new_page_slot()
+                    await _set_page_slot(page, slot)
                     _LEASED_CHATGPT_PAGE_SLOTS.add(slot)
                     return page, slot
 
-            if len(slot_pages) < max_pages:
-                if reusable_pages:
-                    page = reusable_pages[-1]
-                else:
-                    page = await context.new_page()
-                slot = _new_page_slot()
-                await _set_page_slot(page, slot)
-                _LEASED_CHATGPT_PAGE_SLOTS.add(slot)
-                return page, slot
-
-        await asyncio.sleep(0.25)
+        await _sleep_interruptible(0.25)
 
 
 async def _release_chatgpt_page_slot(slot):
@@ -1515,7 +1603,8 @@ async def _connect_browser(
         )
         await asyncio.to_thread(_wait_for_cdp, cdp_base, 30)
 
-    browser = await playwright.chromium.connect_over_cdp(cdp_base)
+    _check_interrupted()
+    browser = await _await_interruptible(playwright.chromium.connect_over_cdp(cdp_base))
     context = browser.contexts[0] if browser.contexts else await browser.new_context()
     return browser, context, spawned
 
@@ -1634,10 +1723,17 @@ class WuddChatGPTBrowser:
                         profile_directory=profile_directory,
                     )
 
-            results = await asyncio.gather(*[
-                run_single(single_image)
+            tasks = [
+                asyncio.create_task(run_single(single_image))
                 for single_image in image_batch
-            ])
+            ]
+            try:
+                results = await asyncio.gather(*tasks)
+            except BaseException:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise
             return _merge_batch_results(results)
 
         try:
@@ -1653,12 +1749,15 @@ class WuddChatGPTBrowser:
         upload_path = None
         spawned = None
         browser = None
+        page = None
         page_slot = None
         image_collector = None
-        playwright = await async_playwright().start()
+        _check_interrupted()
+        playwright = await _await_interruptible(async_playwright().start())
 
         try:
             async with _browser_execution_lock():
+                _check_interrupted()
                 browser, context, spawned = await _connect_browser(
                     playwright,
                     connection_mode,
@@ -1684,7 +1783,7 @@ class WuddChatGPTBrowser:
                 upload_path = _make_upload_png(image)
                 await _attach_image_file(page, upload_path, wait_timeout_seconds)
                 if float(upload_wait_seconds) > 0:
-                    await asyncio.sleep(float(upload_wait_seconds))
+                    await _sleep_interruptible(float(upload_wait_seconds))
 
             ignored_image_urls = await _page_known_image_urls(page)
             image_collector = _ImageResponseCollector(
@@ -1698,8 +1797,8 @@ class WuddChatGPTBrowser:
             if submit_action == "click_send_button":
                 await _click_send_button(page, wait_timeout_seconds)
             else:
-                await composer.press("Enter")
-                await asyncio.sleep(2.0)
+                await _await_interruptible(composer.press("Enter"))
+                await _sleep_interruptible(2.0)
                 if not await _response_started(page, previous_count):
                     await _click_send_button(page, 5, required=False)
 
@@ -1712,6 +1811,10 @@ class WuddChatGPTBrowser:
                 prompt,
             )
             return (text, page.url, _pil_images_to_tensor_batch(images), len(images))
+        except BaseException:
+            if page is not None:
+                await _try_stop_response(page)
+            raise
         finally:
             if image_collector is not None:
                 image_collector.stop()
