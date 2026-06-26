@@ -10,4 +10,16 @@ from .v3_adapter import WUDD_V3_NODE_CLASSES, comfy_entrypoint
 
 WEB_DIRECTORY = "./web"
 
-__all__ = ["WEB_DIRECTORY", "WUDD_V3_NODE_CLASSES", "comfy_entrypoint"]
+NODE_CLASS_MAPPINGS = WUDD_V3_NODE_CLASSES
+NODE_DISPLAY_NAME_MAPPINGS = {
+    node_id: node_cls.GET_SCHEMA().display_name or node_id
+    for node_id, node_cls in WUDD_V3_NODE_CLASSES.items()
+}
+
+__all__ = [
+    "WEB_DIRECTORY",
+    "WUDD_V3_NODE_CLASSES",
+    "NODE_CLASS_MAPPINGS",
+    "NODE_DISPLAY_NAME_MAPPINGS",
+    "comfy_entrypoint",
+]
