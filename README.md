@@ -256,6 +256,10 @@ Submit a prompt and optional `IMAGE` to [chatgpt.com](https://chatgpt.com/) thro
 - Node id: `WuddV3ChatGPTBrowser`.
 - Uses your own browser session; no ChatGPT password or API key is handled by the node.
 - Default mode connects to `http://127.0.0.1:9222` if a CDP browser is already running, otherwise launches Edge with a persistent profile under ComfyUI `user/wudd_browser_profiles/`.
+- `profile_mode` controls login storage:
+  - `wudd_isolated_profile`: separate Wudd browser profile. Log in once in the opened browser and it will persist there.
+  - `browser_default_profile`: use the selected browser's normal profile root, such as Edge's existing login profile. Close all Edge/Chrome windows first, then set `profile_directory` to `Default`, `Profile 1`, `Profile 2`, etc.
+  - `custom_user_data_dir`: use a manually supplied `user_data_dir`.
 - Uploads the first input image as a temporary PNG, fills the ChatGPT composer, submits with Enter by default, and waits for the response text to stabilize.
 - Exports images from the latest assistant response as a ComfyUI `IMAGE` batch. When the response contains no images, the node returns one 1x1 black placeholder image and `image_count = 0`.
 - Returns:
@@ -271,7 +275,7 @@ Inputs:
 - `connection_mode`: `connect_or_launch_edge`, `connect_or_launch_chrome`, `connect_cdp`, `launch_chrome`, `launch_edge`
 - `new_chat`
 - `submit_action`: `press_enter`, `click_send_button`
-- advanced `chatgpt_url`, `cdp_url`, `wait_timeout_seconds`, `stable_seconds`, `upload_wait_seconds`, `keep_browser_open`, `browser_executable`, `user_data_dir`
+- advanced `chatgpt_url`, `cdp_url`, `wait_timeout_seconds`, `stable_seconds`, `upload_wait_seconds`, `keep_browser_open`, `profile_mode`, `profile_directory`, `browser_executable`, `user_data_dir`
 
 To connect to an already-running Edge or Chrome profile, start the browser with remote debugging enabled, for example:
 

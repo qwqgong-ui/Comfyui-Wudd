@@ -55,6 +55,7 @@ from .nodes_text import (
 from .nodes_video import WuddConcatVideos, WuddFastForwardVideo, WuddSaveVideo
 from .nodes_browser import (
     BROWSER_CONNECTION_MODES,
+    BROWSER_PROFILE_MODES,
     DEFAULT_CDP_URL,
     DEFAULT_CHATGPT_URL,
     SUBMIT_ACTIONS,
@@ -1391,6 +1392,12 @@ class WuddV3ChatGPTBrowser(_FingerprintBackendNode, IO.ComfyNode):
                 IO.Boolean.Input("new_chat", default=True),
                 IO.Combo.Input("submit_action", options=SUBMIT_ACTIONS, default="press_enter"),
                 IO.Boolean.Input("keep_browser_open", default=True, advanced=True),
+                IO.Combo.Input(
+                    "profile_mode",
+                    options=BROWSER_PROFILE_MODES,
+                    default="wudd_isolated_profile",
+                    advanced=True,
+                ),
                 IO.Int.Input(
                     "run_id",
                     default=0,
@@ -1402,6 +1409,7 @@ class WuddV3ChatGPTBrowser(_FingerprintBackendNode, IO.ComfyNode):
                 IO.Image.Input("image", optional=True),
                 IO.String.Input("browser_executable", default="", advanced=True),
                 IO.String.Input("user_data_dir", default="", advanced=True),
+                IO.String.Input("profile_directory", default="Default", advanced=True),
             ],
             outputs=[
                 IO.String.Output("text", display_name="text"),
@@ -1424,10 +1432,12 @@ class WuddV3ChatGPTBrowser(_FingerprintBackendNode, IO.ComfyNode):
         new_chat,
         submit_action,
         keep_browser_open,
+        profile_mode,
         run_id,
         image=None,
         browser_executable="",
         user_data_dir="",
+        profile_directory="Default",
     ) -> IO.NodeOutput:
         return await cls._run_backend(
             "submit",
@@ -1441,10 +1451,12 @@ class WuddV3ChatGPTBrowser(_FingerprintBackendNode, IO.ComfyNode):
             new_chat=new_chat,
             submit_action=submit_action,
             keep_browser_open=keep_browser_open,
+            profile_mode=profile_mode,
             run_id=run_id,
             image=image,
             browser_executable=browser_executable,
             user_data_dir=user_data_dir,
+            profile_directory=profile_directory,
         )
 
 

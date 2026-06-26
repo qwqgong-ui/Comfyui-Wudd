@@ -40,6 +40,11 @@ BROWSER_CONNECTION_MODES = [
     "launch_edge",
 ]
 SUBMIT_ACTIONS = ["press_enter", "click_send_button"]
+BROWSER_PROFILE_MODES = [
+    "wudd_isolated_profile",
+    "browser_default_profile",
+    "custom_user_data_dir",
+]
 
 COMPOSER_SELECTORS = [
     '#prompt-textarea[contenteditable="true"]',
@@ -282,6 +287,49 @@ def _default_user_data_dir(browser_name):
     return os.path.join(root, browser_name)
 
 
+def _default_browser_user_data_dir(browser_name):
+    if sys.platform == "win32":
+        local_appdata = os.environ.get("LOCALAPPDATA", "")
+        if browser_name == "edge":
+            return os.path.join(local_appdata, "Microsoft", "Edge", "User Data")
+        return os.path.join(local_appdata, "Google", "Chrome", "User Data")
+
+    if sys.platform == "darwin":
+        home = os.path.expanduser("~")
+        if browser_name == "edge":
+            return os.path.join(home, "Library", "Application Support", "Microsoft Edge")
+        return os.path.join(home, "Library", "Application Support", "Google", "Chrome")
+
+    home = os.path.expanduser("~")
+    if browser_name == "edge":
+        return os.path.join(home, ".config", "microsoft-edge")
+    return os.path.join(home, ".config", "google-chrome")
+
+
+def _resolve_profile_options(browser_name, profile_mode, user_data_dir, profile_directory):
+    profile_mode = str(profile_mode or "wudd_isolated_profile").strip()
+    profile_directory = str(profile_directory or "").strip()
+
+    if profile_mode == "custom_user_data_dir":
+        if not str(user_data_dir or "").strip():
+            raise ValueError("user_data_dir is required when profile_mode is custom_user_data_dir.")
+        return _expand_path(user_data_dir), profile_directory
+
+    if profile_mode == "browser_default_profile":
+        profile_dir = _default_browser_user_data_dir(browser_name)
+        if not os.path.isdir(profile_dir):
+            raise ValueError(
+                f"Default {browser_name} profile directory was not found: {profile_dir}"
+            )
+        return profile_dir, profile_directory or "Default"
+
+    if profile_mode != "wudd_isolated_profile":
+        raise ValueError(f"Unsupported profile_mode: {profile_mode}")
+
+    profile_dir = _default_user_data_dir(browser_name)
+    return profile_dir, profile_directory
+
+
 def _candidate_paths(browser_name):
     paths = []
     if browser_name == "edge":
@@ -340,7 +388,15 @@ def _resolve_browser_executable(browser_name, browser_executable):
     )
 
 
-def _launch_browser(browser_name, cdp_url, browser_executable, user_data_dir, chatgpt_url):
+def _launch_browser(
+    browser_name,
+    cdp_url,
+    browser_executable,
+    profile_mode,
+    user_data_dir,
+    profile_directory,
+    chatgpt_url,
+):
     cdp_base, host, port = _normalize_cdp_url(cdp_url)
     if _is_cdp_ready(cdp_base):
         return None
@@ -350,7 +406,12 @@ def _launch_browser(browser_name, cdp_url, browser_executable, user_data_dir, ch
         )
 
     executable = _resolve_browser_executable(browser_name, browser_executable)
-    profile_dir = _expand_path(user_data_dir) if str(user_data_dir or "").strip() else _default_user_data_dir(browser_name)
+    profile_dir, resolved_profile_directory = _resolve_profile_options(
+        browser_name,
+        profile_mode,
+        user_data_dir,
+        profile_directory,
+    )
     os.makedirs(profile_dir, exist_ok=True)
 
     cmd = [
@@ -361,6 +422,8 @@ def _launch_browser(browser_name, cdp_url, browser_executable, user_data_dir, ch
         "--no-default-browser-check",
         chatgpt_url,
     ]
+    if resolved_profile_directory:
+        cmd.insert(-1, f"--profile-directory={resolved_profile_directory}")
     return subprocess.Popen(
         cmd,
         stdin=subprocess.DEVNULL,
@@ -642,24 +705,64 @@ async def _get_chatgpt_page(context, chatgpt_url, new_chat):
     return page
 
 
-async def _connect_browser(playwright, connection_mode, cdp_url, browser_executable,
-                           user_data_dir, chatgpt_url):
+async def _connect_browser(
+    playwright,
+    connection_mode,
+    cdp_url,
+    browser_executable,
+    profile_mode,
+    user_data_dir,
+    profile_directory,
+    chatgpt_url,
+):
     cdp_base, _, _ = _normalize_cdp_url(cdp_url)
     spawned = None
 
     if connection_mode == "connect_or_launch_chrome":
         if not _is_cdp_ready(cdp_base):
-            spawned = _launch_browser("chrome", cdp_base, browser_executable, user_data_dir, chatgpt_url)
+            spawned = _launch_browser(
+                "chrome",
+                cdp_base,
+                browser_executable,
+                profile_mode,
+                user_data_dir,
+                profile_directory,
+                chatgpt_url,
+            )
             await asyncio.to_thread(_wait_for_cdp, cdp_base, 30)
     elif connection_mode == "connect_or_launch_edge":
         if not _is_cdp_ready(cdp_base):
-            spawned = _launch_browser("edge", cdp_base, browser_executable, user_data_dir, chatgpt_url)
+            spawned = _launch_browser(
+                "edge",
+                cdp_base,
+                browser_executable,
+                profile_mode,
+                user_data_dir,
+                profile_directory,
+                chatgpt_url,
+            )
             await asyncio.to_thread(_wait_for_cdp, cdp_base, 30)
     elif connection_mode == "launch_chrome":
-        spawned = _launch_browser("chrome", cdp_base, browser_executable, user_data_dir, chatgpt_url)
+        spawned = _launch_browser(
+            "chrome",
+            cdp_base,
+            browser_executable,
+            profile_mode,
+            user_data_dir,
+            profile_directory,
+            chatgpt_url,
+        )
         await asyncio.to_thread(_wait_for_cdp, cdp_base, 30)
     elif connection_mode == "launch_edge":
-        spawned = _launch_browser("edge", cdp_base, browser_executable, user_data_dir, chatgpt_url)
+        spawned = _launch_browser(
+            "edge",
+            cdp_base,
+            browser_executable,
+            profile_mode,
+            user_data_dir,
+            profile_directory,
+            chatgpt_url,
+        )
         await asyncio.to_thread(_wait_for_cdp, cdp_base, 30)
 
     browser = await playwright.chromium.connect_over_cdp(cdp_base)
@@ -691,6 +794,7 @@ class WuddChatGPTBrowser:
                 "new_chat": ("BOOLEAN", {"default": True}),
                 "submit_action": (SUBMIT_ACTIONS, {"default": "press_enter"}),
                 "keep_browser_open": ("BOOLEAN", {"default": True, "advanced": True}),
+                "profile_mode": (BROWSER_PROFILE_MODES, {"default": "wudd_isolated_profile", "advanced": True}),
                 "run_id": (
                     "INT",
                     {
@@ -706,6 +810,7 @@ class WuddChatGPTBrowser:
                 "image": ("IMAGE",),
                 "browser_executable": ("STRING", {"default": "", "advanced": True}),
                 "user_data_dir": ("STRING", {"default": "", "advanced": True}),
+                "profile_directory": ("STRING", {"default": "Default", "advanced": True}),
             },
         }
 
@@ -730,10 +835,12 @@ class WuddChatGPTBrowser:
         new_chat,
         submit_action,
         keep_browser_open,
+        profile_mode,
         run_id,
         image=None,
         browser_executable="",
         user_data_dir="",
+        profile_directory="Default",
     ):
         prompt = str(prompt or "")
         if not prompt.strip() and image is None:
@@ -742,6 +849,8 @@ class WuddChatGPTBrowser:
             raise ValueError(f"Unsupported connection_mode: {connection_mode}")
         if submit_action not in SUBMIT_ACTIONS:
             raise ValueError(f"Unsupported submit_action: {submit_action}")
+        if profile_mode not in BROWSER_PROFILE_MODES:
+            raise ValueError(f"Unsupported profile_mode: {profile_mode}")
 
         try:
             from playwright.async_api import async_playwright
@@ -764,7 +873,9 @@ class WuddChatGPTBrowser:
                 connection_mode,
                 cdp_base,
                 browser_executable,
+                profile_mode,
                 user_data_dir,
+                profile_directory,
                 chatgpt_url,
             )
             page = await _get_chatgpt_page(context, chatgpt_url, bool(new_chat))
