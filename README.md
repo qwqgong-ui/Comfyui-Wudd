@@ -45,8 +45,11 @@ Restart ComfyUI after installation.
 - `scipy`
 - `av`
 - `imageio-ffmpeg`
+- `playwright`
 
 `imageio-ffmpeg` provides an internal ffmpeg executable for the video and audio-video nodes. The nodes resolve ffmpeg automatically and do not require a path widget.
+
+`playwright` is used only by the ChatGPT browser automation node. The node connects to Chrome/Edge through the local Chrome DevTools Protocol and can use your installed browser, so a separate `playwright install` browser download is not required for the default workflow.
 
 If you need an offline/local override, place the Windows ffmpeg executables in this repository's `bin/` folder:
 
@@ -245,6 +248,38 @@ Join up to 5 path segments with `/`.
 
 - Ignores blank segments.
 - Useful for building portable path-like prompt strings or API inputs.
+
+### Wudd V3 ChatGPT Browser
+
+Submit a prompt and optional `IMAGE` to [chatgpt.com](https://chatgpt.com/) through a local Chrome/Edge browser, then return the latest assistant text and response images to ComfyUI.
+
+- Node id: `WuddV3ChatGPTBrowser`.
+- Uses your own browser session; no ChatGPT password or API key is handled by the node.
+- Default mode connects to `http://127.0.0.1:9222` if a CDP browser is already running, otherwise launches Edge with a persistent profile under ComfyUI `user/wudd_browser_profiles/`.
+- Uploads the first input image as a temporary PNG, fills the ChatGPT composer, submits with Enter by default, and waits for the response text to stabilize.
+- Exports images from the latest assistant response as a ComfyUI `IMAGE` batch. When the response contains no images, the node returns one 1x1 black placeholder image and `image_count = 0`.
+- Returns:
+  - `text`
+  - `conversation_url`
+  - `images`
+  - `image_count`
+
+Inputs:
+
+- `prompt`
+- optional `image`
+- `connection_mode`: `connect_or_launch_edge`, `connect_or_launch_chrome`, `connect_cdp`, `launch_chrome`, `launch_edge`
+- `new_chat`
+- `submit_action`: `press_enter`, `click_send_button`
+- advanced `chatgpt_url`, `cdp_url`, `wait_timeout_seconds`, `stable_seconds`, `upload_wait_seconds`, `keep_browser_open`, `browser_executable`, `user_data_dir`
+
+To connect to an already-running Edge or Chrome profile, start the browser with remote debugging enabled, for example:
+
+```powershell
+msedge.exe --remote-debugging-port=9222 --user-data-dir="$env:USERPROFILE\.wudd-chatgpt-browser"
+```
+
+Then set `connection_mode` to `connect_cdp`. If ChatGPT asks you to log in, complete the login in the opened browser and run the node again.
 
 ### Wudd Group Switch
 

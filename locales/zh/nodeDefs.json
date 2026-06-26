@@ -603,5 +603,31 @@
       "1": { "name": "文本" },
       "2": { "name": "响应 ID" }
     }
+  },
+  "WuddV3ChatGPTBrowser": {
+    "display_name": "Wudd V3 ChatGPT 浏览器",
+    "description": "通过本机 Chrome/Edge 打开 chatgpt.com，上传可选图像并提交提示词，返回最新回复文本和回复图片。",
+    "inputs": {
+      "prompt": { "name": "提示词" },
+      "connection_mode": { "name": "连接模式" },
+      "chatgpt_url": { "name": "ChatGPT URL" },
+      "cdp_url": { "name": "CDP URL" },
+      "wait_timeout_seconds": { "name": "等待超时（秒）" },
+      "stable_seconds": { "name": "稳定等待（秒）" },
+      "upload_wait_seconds": { "name": "上传等待（秒）" },
+      "new_chat": { "name": "新对话" },
+      "submit_action": { "name": "提交方式" },
+      "keep_browser_open": { "name": "保持浏览器打开" },
+      "run_id": { "name": "运行 ID" },
+      "image": { "name": "图像" },
+      "browser_executable": { "name": "浏览器程序路径" },
+      "user_data_dir": { "name": "用户资料目录" }
+    },
+    "outputs": {
+      "0": { "name": "文本" },
+      "1": { "name": "会话 URL" },
+      "2": { "name": "图片" },
+      "3": { "name": "图片数量" }
+    }
   }
 }

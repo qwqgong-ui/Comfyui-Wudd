@@ -53,11 +53,19 @@ from .nodes_text import (
     WuddTextSplitter,
 )
 from .nodes_video import WuddConcatVideos, WuddFastForwardVideo, WuddSaveVideo
+from .nodes_browser import (
+    BROWSER_CONNECTION_MODES,
+    DEFAULT_CDP_URL,
+    DEFAULT_CHATGPT_URL,
+    SUBMIT_ACTIONS,
+    WuddChatGPTBrowser,
+)
 
 
 WUDD_V3_CATEGORY = "Wudd Nodes V3"
 OPENROUTER_TEXT_CATEGORY = f"{WUDD_V3_CATEGORY}/OpenRouter/Text"
 OPENROUTER_IMAGE_CATEGORY = f"{WUDD_V3_CATEGORY}/OpenRouter/Image"
+CHATGPT_BROWSER_CATEGORY = f"{WUDD_V3_CATEGORY}/Browser"
 
 IMAGE_16_NAMES = [f"image_{i}" for i in range(1, 17)]
 IMAGE_50_NAMES = [f"image_{i}" for i in range(1, 51)]
@@ -1338,6 +1346,108 @@ class WuddV3OpenRouterGeminiImage(_OpenRouterV3Node, IO.ComfyNode):
         )
 
 
+class WuddV3ChatGPTBrowser(_FingerprintBackendNode, IO.ComfyNode):
+    BACKEND_CLS = WuddChatGPTBrowser
+
+    @classmethod
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="WuddV3ChatGPTBrowser",
+            display_name="Wudd V3 ChatGPT Browser",
+            category=CHATGPT_BROWSER_CATEGORY,
+            inputs=[
+                IO.String.Input("prompt", default="", multiline=True),
+                IO.Combo.Input(
+                    "connection_mode",
+                    options=BROWSER_CONNECTION_MODES,
+                    default="connect_or_launch_edge",
+                ),
+                IO.String.Input("chatgpt_url", default=DEFAULT_CHATGPT_URL, advanced=True),
+                IO.String.Input("cdp_url", default=DEFAULT_CDP_URL, advanced=True),
+                IO.Int.Input(
+                    "wait_timeout_seconds",
+                    default=300,
+                    min=10,
+                    max=3600,
+                    step=1,
+                    advanced=True,
+                ),
+                IO.Float.Input(
+                    "stable_seconds",
+                    default=2.0,
+                    min=0.5,
+                    max=30.0,
+                    step=0.5,
+                    advanced=True,
+                ),
+                IO.Float.Input(
+                    "upload_wait_seconds",
+                    default=4.0,
+                    min=0.0,
+                    max=120.0,
+                    step=0.5,
+                    advanced=True,
+                ),
+                IO.Boolean.Input("new_chat", default=True),
+                IO.Combo.Input("submit_action", options=SUBMIT_ACTIONS, default="press_enter"),
+                IO.Boolean.Input("keep_browser_open", default=True, advanced=True),
+                IO.Int.Input(
+                    "run_id",
+                    default=0,
+                    min=0,
+                    max=2147483647,
+                    step=1,
+                    control_after_generate=True,
+                ),
+                IO.Image.Input("image", optional=True),
+                IO.String.Input("browser_executable", default="", advanced=True),
+                IO.String.Input("user_data_dir", default="", advanced=True),
+            ],
+            outputs=[
+                IO.String.Output("text", display_name="text"),
+                IO.String.Output("conversation_url", display_name="conversation_url"),
+                IO.Image.Output("images", display_name="images"),
+                IO.Int.Output("image_count", display_name="image_count"),
+            ],
+        )
+
+    @classmethod
+    async def execute(
+        cls,
+        prompt,
+        connection_mode,
+        chatgpt_url,
+        cdp_url,
+        wait_timeout_seconds,
+        stable_seconds,
+        upload_wait_seconds,
+        new_chat,
+        submit_action,
+        keep_browser_open,
+        run_id,
+        image=None,
+        browser_executable="",
+        user_data_dir="",
+    ) -> IO.NodeOutput:
+        return await cls._run_backend(
+            "submit",
+            prompt=prompt,
+            connection_mode=connection_mode,
+            chatgpt_url=chatgpt_url,
+            cdp_url=cdp_url,
+            wait_timeout_seconds=wait_timeout_seconds,
+            stable_seconds=stable_seconds,
+            upload_wait_seconds=upload_wait_seconds,
+            new_chat=new_chat,
+            submit_action=submit_action,
+            keep_browser_open=keep_browser_open,
+            run_id=run_id,
+            image=image,
+            browser_executable=browser_executable,
+            user_data_dir=user_data_dir,
+        )
+
+
 WUDD_V3_NODE_CLASSES = {
     "WuddV3MultiSaveImage": WuddV3MultiSaveImage,
     "WuddV3SaveVideo": WuddV3SaveVideo,
@@ -1360,6 +1470,7 @@ WUDD_V3_NODE_CLASSES = {
     "WuddV3OpenRouterGPTImage": WuddV3OpenRouterGPTImage,
     "WuddV3OpenRouterGeminiImage": WuddV3OpenRouterGeminiImage,
     "WuddV3GroupSwitch": WuddV3GroupSwitch,
+    "WuddV3ChatGPTBrowser": WuddV3ChatGPTBrowser,
 }
 
 

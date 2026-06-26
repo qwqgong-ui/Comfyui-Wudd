@@ -1,10 +1,14 @@
 {
   "nodeCategories": {
     "Wudd Nodes": "Wudd 节点",
+    "Wudd Nodes V3": "Wudd 节点 V3",
+    "Wudd Nodes V3/Browser": "Wudd 节点 V3/浏览器",
     "Wudd Nodes/Wireless": "Wudd 节点/无线连接",
     "Wudd Nodes/OpenRouter/Text": "Wudd 节点/OpenRouter/文本",
     "Wudd Nodes/OpenRouter/Image": "Wudd 节点/OpenRouter/图像",
+    "Wudd Nodes/Browser": "Wudd 节点/浏览器",
     "OpenRouter": "OpenRouter",
+    "Browser": "浏览器",
     "Text": "文本",
     "Image": "图像"
   }
