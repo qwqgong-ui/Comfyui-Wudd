@@ -618,6 +618,7 @@
       "new_chat": { "name": "新对话" },
       "submit_action": { "name": "提交方式" },
       "keep_browser_open": { "name": "保持浏览器打开" },
+      "parallel_pages": { "name": "并行页数" },
       "profile_mode": { "name": "资料模式" },
       "run_id": { "name": "运行 ID" },
       "image": { "name": "图像" },

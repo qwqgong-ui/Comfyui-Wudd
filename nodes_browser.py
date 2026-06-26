@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from io import BytesIO
 from urllib.error import URLError
 from urllib.parse import urlparse
@@ -46,6 +47,9 @@ BROWSER_PROFILE_MODES = [
     "custom_user_data_dir",
 ]
 _BROWSER_EXECUTION_LOCKS = {}
+_BROWSER_PAGE_POOL_LOCKS = {}
+_CHATGPT_PAGE_SLOT_PREFIX = "wudd-chatgpt-browser:"
+_LEASED_CHATGPT_PAGE_SLOTS = set()
 
 COMPOSER_SELECTORS = [
     '#prompt-textarea[contenteditable="true"]',
@@ -346,6 +350,23 @@ def _browser_execution_lock():
         lock = asyncio.Lock()
         _BROWSER_EXECUTION_LOCKS[key] = lock
     return lock
+
+
+def _browser_page_pool_lock():
+    loop = asyncio.get_running_loop()
+    key = id(loop)
+    lock = _BROWSER_PAGE_POOL_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _BROWSER_PAGE_POOL_LOCKS[key] = lock
+    return lock
+
+
+def _normalize_parallel_pages(value):
+    try:
+        return max(1, min(8, int(value)))
+    except (TypeError, ValueError):
+        return 2
 
 
 def _normalize_url(url, default):
@@ -1341,22 +1362,97 @@ async def _goto_chatgpt(page, chatgpt_url):
         raise last_error
 
 
-async def _get_chatgpt_page(context, chatgpt_url, new_chat):
-    if new_chat:
-        page = await context.new_page()
-        await _goto_chatgpt(page, chatgpt_url)
-        await page.bring_to_front()
-        return page
+async def _page_slot(page):
+    try:
+        value = await page.evaluate("() => window.name || ''")
+    except Exception:
+        return ""
+    value = str(value or "")
+    if value.startswith(_CHATGPT_PAGE_SLOT_PREFIX):
+        return value
+    return ""
 
-    candidates = [
-        page for page in context.pages
-        if _is_chatgpt_page_url(page.url)
-    ]
-    page = candidates[-1] if candidates else await context.new_page()
-    await page.bring_to_front()
-    if not _is_chatgpt_page_url(page.url):
-        await _goto_chatgpt(page, chatgpt_url)
-    return page
+
+async def _set_page_slot(page, slot):
+    try:
+        await page.evaluate("(slot) => { window.name = slot; }", slot)
+    except Exception:
+        pass
+
+
+def _new_page_slot():
+    return _CHATGPT_PAGE_SLOT_PREFIX + uuid.uuid4().hex
+
+
+def _is_reusable_unnamed_chatgpt_page(url, chatgpt_url):
+    if not _is_chatgpt_page_url(url):
+        return False
+    try:
+        parsed = urlparse(str(url or ""))
+    except Exception:
+        return False
+    path = (parsed.path or "/").rstrip("/")
+    return path in ("", "/")
+
+
+async def _acquire_chatgpt_page(context, chatgpt_url, new_chat, parallel_pages):
+    max_pages = _normalize_parallel_pages(parallel_pages)
+    lock = _browser_page_pool_lock()
+
+    while True:
+        async with lock:
+            slot_pages = []
+            reusable_pages = []
+            for page in list(context.pages):
+                try:
+                    if page.is_closed():
+                        continue
+                except Exception:
+                    continue
+
+                slot = await _page_slot(page)
+                if slot:
+                    slot_pages.append((slot, page))
+                    continue
+                if _is_reusable_unnamed_chatgpt_page(page.url, chatgpt_url):
+                    reusable_pages.append(page)
+
+            for slot, page in reversed(slot_pages):
+                if slot not in _LEASED_CHATGPT_PAGE_SLOTS:
+                    _LEASED_CHATGPT_PAGE_SLOTS.add(slot)
+                    return page, slot
+
+            if len(slot_pages) < max_pages:
+                if reusable_pages:
+                    page = reusable_pages[-1]
+                else:
+                    page = await context.new_page()
+                slot = _new_page_slot()
+                await _set_page_slot(page, slot)
+                _LEASED_CHATGPT_PAGE_SLOTS.add(slot)
+                return page, slot
+
+        await asyncio.sleep(0.25)
+
+
+async def _release_chatgpt_page_slot(slot):
+    if not slot:
+        return
+    async with _browser_page_pool_lock():
+        _LEASED_CHATGPT_PAGE_SLOTS.discard(slot)
+
+
+async def _get_chatgpt_page(context, chatgpt_url, new_chat, parallel_pages):
+    page, slot = await _acquire_chatgpt_page(context, chatgpt_url, new_chat, parallel_pages)
+    try:
+        await page.bring_to_front()
+        if new_chat or not _is_chatgpt_page_url(page.url):
+            await _goto_chatgpt(page, chatgpt_url)
+            await _set_page_slot(page, slot)
+        return page, slot
+    except Exception:
+        await _release_chatgpt_page_slot(slot)
+        raise
 
 
 async def _connect_browser(
@@ -1448,6 +1544,10 @@ class WuddChatGPTBrowser:
                 "new_chat": ("BOOLEAN", {"default": True}),
                 "submit_action": (SUBMIT_ACTIONS, {"default": "press_enter"}),
                 "keep_browser_open": ("BOOLEAN", {"default": True, "advanced": True}),
+                "parallel_pages": (
+                    "INT",
+                    {"default": 2, "min": 1, "max": 8, "step": 1, "advanced": True},
+                ),
                 "profile_mode": (BROWSER_PROFILE_MODES, {"default": "wudd_isolated_profile", "advanced": True}),
                 "run_id": (
                     "INT",
@@ -1489,6 +1589,7 @@ class WuddChatGPTBrowser:
         new_chat,
         submit_action,
         keep_browser_open,
+        parallel_pages,
         profile_mode,
         run_id,
         image=None,
@@ -1505,29 +1606,38 @@ class WuddChatGPTBrowser:
             raise ValueError(f"Unsupported submit_action: {submit_action}")
         if profile_mode not in BROWSER_PROFILE_MODES:
             raise ValueError(f"Unsupported profile_mode: {profile_mode}")
+        parallel_pages = _normalize_parallel_pages(parallel_pages)
 
         image_batch = _split_image_batch(image)
         if len(image_batch) > 1:
-            results = []
-            for single_image in image_batch:
-                results.append(await self.submit(
-                    prompt,
-                    connection_mode,
-                    chatgpt_url,
-                    cdp_url,
-                    wait_timeout_seconds,
-                    stable_seconds,
-                    upload_wait_seconds,
-                    new_chat,
-                    submit_action,
-                    keep_browser_open,
-                    profile_mode,
-                    run_id,
-                    image=single_image,
-                    browser_executable=browser_executable,
-                    user_data_dir=user_data_dir,
-                    profile_directory=profile_directory,
-                ))
+            semaphore = asyncio.Semaphore(parallel_pages)
+
+            async def run_single(single_image):
+                async with semaphore:
+                    return await self.submit(
+                        prompt,
+                        connection_mode,
+                        chatgpt_url,
+                        cdp_url,
+                        wait_timeout_seconds,
+                        stable_seconds,
+                        upload_wait_seconds,
+                        new_chat,
+                        submit_action,
+                        keep_browser_open,
+                        parallel_pages,
+                        profile_mode,
+                        run_id,
+                        image=single_image,
+                        browser_executable=browser_executable,
+                        user_data_dir=user_data_dir,
+                        profile_directory=profile_directory,
+                    )
+
+            results = await asyncio.gather(*[
+                run_single(single_image)
+                for single_image in image_batch
+            ])
             return _merge_batch_results(results)
 
         try:
@@ -1543,27 +1653,28 @@ class WuddChatGPTBrowser:
         upload_path = None
         spawned = None
         browser = None
+        page_slot = None
         image_collector = None
-        browser_lock = _browser_execution_lock()
-        await browser_lock.acquire()
-        try:
-            playwright = await async_playwright().start()
-        except Exception:
-            browser_lock.release()
-            raise
+        playwright = await async_playwright().start()
 
         try:
-            browser, context, spawned = await _connect_browser(
-                playwright,
-                connection_mode,
-                cdp_base,
-                browser_executable,
-                profile_mode,
-                user_data_dir,
-                profile_directory,
+            async with _browser_execution_lock():
+                browser, context, spawned = await _connect_browser(
+                    playwright,
+                    connection_mode,
+                    cdp_base,
+                    browser_executable,
+                    profile_mode,
+                    user_data_dir,
+                    profile_directory,
+                    chatgpt_url,
+                )
+            page, page_slot = await _get_chatgpt_page(
+                context,
                 chatgpt_url,
+                bool(new_chat),
+                parallel_pages,
             )
-            page = await _get_chatgpt_page(context, chatgpt_url, bool(new_chat))
             composer = await _first_visible_locator(page, COMPOSER_SELECTORS, wait_timeout_seconds)
             previous_count = len(await _assistant_texts(page))
             ignored_image_fingerprints = set()
@@ -1604,6 +1715,8 @@ class WuddChatGPTBrowser:
         finally:
             if image_collector is not None:
                 image_collector.stop()
+            if page_slot is not None:
+                await _release_chatgpt_page_slot(page_slot)
 
             if upload_path and os.path.exists(upload_path):
                 try:
@@ -1619,10 +1732,7 @@ class WuddChatGPTBrowser:
                         pass
                 if spawned.poll() is None:
                     spawned.terminate()
-            try:
-                await playwright.stop()
-            finally:
-                browser_lock.release()
+            await playwright.stop()
 
 
 __all__ = ["WuddChatGPTBrowser"]
