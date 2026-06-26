@@ -18,7 +18,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import uuid
 from io import BytesIO
 from urllib.error import URLError
 from urllib.parse import urlparse
@@ -54,8 +53,7 @@ BROWSER_PROFILE_MODES = [
 ]
 _BROWSER_EXECUTION_LOCKS = {}
 _BROWSER_PAGE_POOL_LOCKS = {}
-_CHATGPT_PAGE_SLOT_PREFIX = "wudd-chatgpt-browser:"
-_LEASED_CHATGPT_PAGE_SLOTS = set()
+_BROWSER_SESSIONS = {}
 
 COMPOSER_SELECTORS = [
     '#prompt-textarea[contenteditable="true"]',
@@ -391,6 +389,51 @@ def _browser_page_pool_lock():
     return lock
 
 
+class _BrowserSession:
+    def __init__(self, key, playwright, browser, context, spawned):
+        self.key = key
+        self.playwright = playwright
+        self.browser = browser
+        self.context = context
+        self.spawned = spawned
+        self.page_pool = []
+        self.leased_page_ids = set()
+
+
+def _browser_session_key(cdp_url):
+    cdp_base, _, _ = _normalize_cdp_url(cdp_url)
+    return (id(asyncio.get_running_loop()), cdp_base)
+
+
+def _browser_session_is_connected(session):
+    if session is None or session.browser is None:
+        return False
+    try:
+        is_connected = getattr(session.browser, "is_connected", None)
+        if callable(is_connected):
+            return bool(is_connected())
+    except Exception:
+        return False
+    return True
+
+
+async def _discard_browser_session(session_key, session):
+    current = _BROWSER_SESSIONS.get(session_key)
+    if current is session:
+        _BROWSER_SESSIONS.pop(session_key, None)
+    if session is None:
+        return
+    with contextlib.suppress(Exception):
+        if session.browser is not None:
+            await session.browser.close()
+    if session.spawned is not None and session.spawned.poll() is None:
+        with contextlib.suppress(Exception):
+            session.spawned.terminate()
+    with contextlib.suppress(Exception):
+        if session.playwright is not None:
+            await session.playwright.stop()
+
+
 def _normalize_parallel_pages(value):
     try:
         return max(1, min(8, int(value)))
@@ -413,6 +456,11 @@ async def _sleep_interruptible(seconds, interval=0.25):
         await asyncio.sleep(min(float(interval), remaining))
 
 
+def _consume_task_exception(task):
+    with contextlib.suppress(BaseException):
+        task.result()
+
+
 async def _await_interruptible(awaitable, interval=0.25):
     task = asyncio.ensure_future(awaitable)
     try:
@@ -426,8 +474,9 @@ async def _await_interruptible(awaitable, interval=0.25):
     except BaseException:
         if not task.done():
             task.cancel()
+            task.add_done_callback(_consume_task_exception)
             with contextlib.suppress(BaseException):
-                await task
+                await asyncio.wait_for(asyncio.shield(task), timeout=1.0)
         raise
 
 
@@ -685,10 +734,10 @@ async def _first_visible_locator(page, selectors, timeout_seconds):
         for selector in selectors:
             try:
                 locator = page.locator(selector)
-                count = await locator.count()
+                count = await _await_interruptible(locator.count())
                 for index in range(count - 1, -1, -1):
                     candidate = locator.nth(index)
-                    if await candidate.is_visible():
+                    if await _await_interruptible(candidate.is_visible()):
                         return candidate
             except Exception as exc:
                 last_error = exc
@@ -699,7 +748,7 @@ async def _first_visible_locator(page, selectors, timeout_seconds):
 
 
 async def _assistant_texts(page):
-    values = await page.evaluate(ASSISTANT_TEXT_SCRIPT)
+    values = await _await_interruptible(page.evaluate(ASSISTANT_TEXT_SCRIPT))
     return [_clean_response_text(value) for value in values if _clean_response_text(value)]
 
 
@@ -991,7 +1040,9 @@ class _ImageResponseCollector:
 
 async def _media_locator_to_pil(locator, timeout_ms, allow_screenshot=True):
     try:
-        data_url = await locator.evaluate(MEDIA_TO_DATA_URL_SCRIPT, timeout=timeout_ms)
+        data_url = await _await_interruptible(
+            locator.evaluate(MEDIA_TO_DATA_URL_SCRIPT, timeout=timeout_ms),
+        )
         image = _pil_from_data_url(data_url)
         if image is not None:
             return image
@@ -1001,7 +1052,7 @@ async def _media_locator_to_pil(locator, timeout_ms, allow_screenshot=True):
     if not allow_screenshot:
         return None
 
-    raw_png = await locator.screenshot(type="png", timeout=timeout_ms)
+    raw_png = await _await_interruptible(locator.screenshot(type="png", timeout=timeout_ms))
     image = Image.open(BytesIO(raw_png))
     image.load()
     return image.convert("RGB")
@@ -1009,9 +1060,11 @@ async def _media_locator_to_pil(locator, timeout_ms, allow_screenshot=True):
 
 async def _url_to_pil_via_page(page, url, timeout_seconds):
     try:
-        data_url = await asyncio.wait_for(
-            page.evaluate(URL_TO_DATA_URL_SCRIPT, url),
-            timeout=max(1.0, float(timeout_seconds)),
+        data_url = await _await_interruptible(
+            asyncio.wait_for(
+                page.evaluate(URL_TO_DATA_URL_SCRIPT, url),
+                timeout=max(1.0, float(timeout_seconds)),
+            )
         )
         return _pil_from_data_url(data_url)
     except Exception:
@@ -1020,7 +1073,7 @@ async def _url_to_pil_via_page(page, url, timeout_seconds):
 
 async def _page_known_image_urls(page):
     try:
-        urls = await page.evaluate(GENERATED_IMAGE_URLS_SCRIPT)
+        urls = await _await_interruptible(page.evaluate(GENERATED_IMAGE_URLS_SCRIPT))
     except Exception:
         return []
     return [_normalize_image_url(url) for url in urls or []]
@@ -1064,13 +1117,15 @@ async def _visible_media_images(
     timeout_ms = max(1000, int(float(timeout_seconds) * 1000))
     images = []
     media = container.locator(selector)
-    count = await media.count()
+    count = await _await_interruptible(media.count())
     for index in range(count):
         locator = media.nth(index)
         try:
-            if not await locator.is_visible():
+            if not await _await_interruptible(locator.is_visible()):
                 continue
-            meta = await locator.evaluate(IMAGE_ELEMENT_METADATA_SCRIPT, timeout=timeout_ms)
+            meta = await _await_interruptible(
+                locator.evaluate(IMAGE_ELEMENT_METADATA_SCRIPT, timeout=timeout_ms),
+            )
             if _image_url_is_ignored((meta or {}).get("url"), ignored_keys):
                 continue
             if _looks_like_upload_thumbnail(meta):
@@ -1081,10 +1136,10 @@ async def _visible_media_images(
                 continue
             if require_generated_meta and not _looks_like_generated_image_meta(meta):
                 continue
-            box = await locator.bounding_box()
+            box = await _await_interruptible(locator.bounding_box())
             if not box or box["width"] < min_size or box["height"] < min_size:
                 continue
-            await locator.scroll_into_view_if_needed(timeout=timeout_ms)
+            await _await_interruptible(locator.scroll_into_view_if_needed(timeout=timeout_ms))
             natural_width = int((meta or {}).get("naturalWidth") or 0)
             natural_height = int((meta or {}).get("naturalHeight") or 0)
             url = (meta or {}).get("url")
@@ -1158,7 +1213,7 @@ async def _latest_assistant_images(
         return images
 
     containers = page.locator('[data-message-author-role="assistant"]')
-    count = await containers.count()
+    count = await _await_interruptible(containers.count())
     for index in range(count - 1, -1, -1):
         images = await _visible_media_images(
             containers.nth(index),
@@ -1169,13 +1224,13 @@ async def _latest_assistant_images(
             return images
 
     articles = page.locator("article")
-    count = await articles.count()
+    count = await _await_interruptible(articles.count())
     for index in range(count - 1, -1, -1):
         article = articles.nth(index)
         try:
             label = (
-                (await article.get_attribute("aria-label")) or
-                (await article.get_attribute("data-testid")) or
+                (await _await_interruptible(article.get_attribute("aria-label"))) or
+                (await _await_interruptible(article.get_attribute("data-testid"))) or
                 ""
             ).lower()
             if "assistant" not in label and "chatgpt" not in label:
@@ -1256,7 +1311,7 @@ async def _wait_for_response_images(
 
 async def _is_streaming(page):
     try:
-        return bool(await page.evaluate(STREAMING_SCRIPT))
+        return bool(await _await_interruptible(page.evaluate(STREAMING_SCRIPT)))
     except Exception:
         return False
 
@@ -1272,7 +1327,7 @@ async def _attach_image_file(page, file_path, timeout_seconds):
     timeout_ms = max(1000, int(float(timeout_seconds) * 1000))
     file_inputs = page.locator('input[type="file"]')
     try:
-        if await file_inputs.count() > 0:
+        if await _await_interruptible(file_inputs.count()) > 0:
             await _await_interruptible(
                 file_inputs.first.set_input_files(file_path, timeout=timeout_ms),
             )
@@ -1283,16 +1338,19 @@ async def _attach_image_file(page, file_path, timeout_seconds):
     for selector in ATTACH_BUTTON_SELECTORS:
         button = page.locator(selector).last
         try:
-            if await button.count() == 0 or not await button.is_visible():
+            if (
+                await _await_interruptible(button.count()) == 0 or
+                not await _await_interruptible(button.is_visible())
+            ):
                 continue
             async with page.expect_file_chooser(timeout=timeout_ms) as file_chooser_info:
                 await _await_interruptible(button.click(timeout=timeout_ms))
-            file_chooser = await file_chooser_info.value
-            await file_chooser.set_files(file_path)
+            file_chooser = await _await_interruptible(file_chooser_info.value)
+            await _await_interruptible(file_chooser.set_files(file_path))
             return
         except Exception:
             try:
-                if await file_inputs.count() > 0:
+                if await _await_interruptible(file_inputs.count()) > 0:
                     await _await_interruptible(
                         file_inputs.first.set_input_files(file_path, timeout=timeout_ms),
                     )
@@ -1326,9 +1384,12 @@ async def _click_send_button(page, timeout_seconds, required=True):
         for selector in SEND_BUTTON_SELECTORS:
             try:
                 button = page.locator(selector).last
-                if await button.count() == 0:
+                if await _await_interruptible(button.count()) == 0:
                     continue
-                if await button.is_visible() and await button.is_enabled():
+                if (
+                    await _await_interruptible(button.is_visible()) and
+                    await _await_interruptible(button.is_enabled())
+                ):
                     await _await_interruptible(button.click())
                     return True
             except Exception:
@@ -1445,28 +1506,6 @@ async def _goto_chatgpt(page, chatgpt_url):
         raise last_error
 
 
-async def _page_slot(page):
-    try:
-        value = await page.evaluate("() => window.name || ''")
-    except Exception:
-        return ""
-    value = str(value or "")
-    if value.startswith(_CHATGPT_PAGE_SLOT_PREFIX):
-        return value
-    return ""
-
-
-async def _set_page_slot(page, slot):
-    try:
-        await page.evaluate("(slot) => { window.name = slot; }", slot)
-    except Exception:
-        pass
-
-
-def _new_page_slot():
-    return _CHATGPT_PAGE_SLOT_PREFIX + uuid.uuid4().hex
-
-
 def _is_reusable_unnamed_chatgpt_page(url, chatgpt_url):
     if not _is_chatgpt_page_url(url):
         return False
@@ -1478,68 +1517,87 @@ def _is_reusable_unnamed_chatgpt_page(url, chatgpt_url):
     return path in ("", "/")
 
 
-async def _acquire_chatgpt_page(context, chatgpt_url, new_chat, parallel_pages):
+def _page_is_closed(page):
+    try:
+        return page.is_closed()
+    except Exception:
+        return True
+
+
+def _prune_session_page_pool(session):
+    if session is None:
+        return
+    session.page_pool = [
+        page for page in session.page_pool
+        if not _page_is_closed(page)
+    ]
+    valid_page_ids = {id(page) for page in session.page_pool}
+    session.leased_page_ids.intersection_update(valid_page_ids)
+
+
+def _claim_reusable_chatgpt_page(session, chatgpt_url):
+    pooled_ids = {id(page) for page in session.page_pool}
+    for page in reversed(list(session.context.pages)):
+        if _page_is_closed(page) or id(page) in pooled_ids:
+            continue
+        if _is_reusable_unnamed_chatgpt_page(page.url, chatgpt_url):
+            session.page_pool.append(page)
+            return page
+    return None
+
+
+async def _acquire_chatgpt_page(session, chatgpt_url, new_chat, parallel_pages):
     max_pages = _normalize_parallel_pages(parallel_pages)
     lock = _browser_page_pool_lock()
 
     while True:
         _check_interrupted()
         async with lock:
-            slot_pages = []
-            reusable_pages = []
-            for page in list(context.pages):
-                try:
-                    if page.is_closed():
-                        continue
-                except Exception:
-                    continue
+            _prune_session_page_pool(session)
 
-                slot = await _page_slot(page)
-                if slot:
-                    slot_pages.append((slot, page))
-                    continue
-                if _is_reusable_unnamed_chatgpt_page(page.url, chatgpt_url):
-                    reusable_pages.append(page)
+            if len(session.leased_page_ids) < max_pages:
+                for page in session.page_pool:
+                    page_id = id(page)
+                    if page_id not in session.leased_page_ids:
+                        session.leased_page_ids.add(page_id)
+                        return page, page_id
 
-            valid_slots = {slot for slot, _ in slot_pages}
-            _LEASED_CHATGPT_PAGE_SLOTS.intersection_update(valid_slots)
-
-            if len(_LEASED_CHATGPT_PAGE_SLOTS) < max_pages:
-                for slot, page in reversed(slot_pages):
-                    if slot not in _LEASED_CHATGPT_PAGE_SLOTS:
-                        _LEASED_CHATGPT_PAGE_SLOTS.add(slot)
-                        return page, slot
-
-                if len(slot_pages) < max_pages:
-                    if reusable_pages:
-                        page = reusable_pages[-1]
-                    else:
-                        page = await context.new_page()
-                    slot = _new_page_slot()
-                    await _set_page_slot(page, slot)
-                    _LEASED_CHATGPT_PAGE_SLOTS.add(slot)
-                    return page, slot
+                if len(session.page_pool) < max_pages:
+                    page = _claim_reusable_chatgpt_page(session, chatgpt_url)
+                    if page is None:
+                        page = await _await_interruptible(session.context.new_page())
+                        session.page_pool.append(page)
+                    page_id = id(page)
+                    session.leased_page_ids.add(page_id)
+                    return page, page_id
 
         await _sleep_interruptible(0.25)
 
 
-async def _release_chatgpt_page_slot(slot):
-    if not slot:
+async def _release_chatgpt_page_slot(session, page_id):
+    if session is None or page_id is None:
         return
     async with _browser_page_pool_lock():
-        _LEASED_CHATGPT_PAGE_SLOTS.discard(slot)
+        session.leased_page_ids.discard(page_id)
+        _prune_session_page_pool(session)
 
 
-async def _get_chatgpt_page(context, chatgpt_url, new_chat, parallel_pages):
-    page, slot = await _acquire_chatgpt_page(context, chatgpt_url, new_chat, parallel_pages)
+async def _close_page_quietly(page):
+    if page is None or _page_is_closed(page):
+        return
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(page.close(), timeout=3.0)
+
+
+async def _get_chatgpt_page(session, chatgpt_url, new_chat, parallel_pages):
+    page, page_id = await _acquire_chatgpt_page(session, chatgpt_url, new_chat, parallel_pages)
     try:
-        await page.bring_to_front()
         if new_chat or not _is_chatgpt_page_url(page.url):
             await _goto_chatgpt(page, chatgpt_url)
-            await _set_page_slot(page, slot)
-        return page, slot
-    except Exception:
-        await _release_chatgpt_page_slot(slot)
+        return page, page_id
+    except BaseException:
+        await _close_page_quietly(page)
+        await _release_chatgpt_page_slot(session, page_id)
         raise
 
 
@@ -1567,7 +1625,7 @@ async def _connect_browser(
                 profile_directory,
                 chatgpt_url,
             )
-            await asyncio.to_thread(_wait_for_cdp, cdp_base, 30)
+            await _await_interruptible(asyncio.to_thread(_wait_for_cdp, cdp_base, 30))
     elif connection_mode == "connect_or_launch_edge":
         if not _is_cdp_ready(cdp_base):
             spawned = _launch_browser(
@@ -1579,7 +1637,7 @@ async def _connect_browser(
                 profile_directory,
                 chatgpt_url,
             )
-            await asyncio.to_thread(_wait_for_cdp, cdp_base, 30)
+            await _await_interruptible(asyncio.to_thread(_wait_for_cdp, cdp_base, 30))
     elif connection_mode == "launch_chrome":
         spawned = _launch_browser(
             "chrome",
@@ -1590,7 +1648,7 @@ async def _connect_browser(
             profile_directory,
             chatgpt_url,
         )
-        await asyncio.to_thread(_wait_for_cdp, cdp_base, 30)
+        await _await_interruptible(asyncio.to_thread(_wait_for_cdp, cdp_base, 30))
     elif connection_mode == "launch_edge":
         spawned = _launch_browser(
             "edge",
@@ -1601,12 +1659,70 @@ async def _connect_browser(
             profile_directory,
             chatgpt_url,
         )
-        await asyncio.to_thread(_wait_for_cdp, cdp_base, 30)
+        await _await_interruptible(asyncio.to_thread(_wait_for_cdp, cdp_base, 30))
 
     _check_interrupted()
     browser = await _await_interruptible(playwright.chromium.connect_over_cdp(cdp_base))
     context = browser.contexts[0] if browser.contexts else await browser.new_context()
     return browser, context, spawned
+
+
+async def _get_browser_session(
+    async_playwright_factory,
+    connection_mode,
+    cdp_url,
+    browser_executable,
+    profile_mode,
+    user_data_dir,
+    profile_directory,
+    chatgpt_url,
+):
+    cdp_base, _, _ = _normalize_cdp_url(cdp_url)
+    session_key = _browser_session_key(cdp_base)
+
+    async with _browser_execution_lock():
+        session = _BROWSER_SESSIONS.get(session_key)
+        if _browser_session_is_connected(session):
+            return session
+
+        if session is not None:
+            await _discard_browser_session(session_key, session)
+
+        _check_interrupted()
+        playwright = await _await_interruptible(async_playwright_factory().start())
+        try:
+            browser, context, spawned = await _connect_browser(
+                playwright,
+                connection_mode,
+                cdp_base,
+                browser_executable,
+                profile_mode,
+                user_data_dir,
+                profile_directory,
+                chatgpt_url,
+            )
+        except BaseException:
+            with contextlib.suppress(Exception):
+                await playwright.stop()
+            raise
+
+        session = _BrowserSession(session_key, playwright, browser, context, spawned)
+        _BROWSER_SESSIONS[session_key] = session
+        return session
+
+
+async def _maybe_close_spawned_browser_session(session, keep_browser_open):
+    if session is None or bool(keep_browser_open) or session.spawned is None:
+        return
+
+    lock = _browser_page_pool_lock()
+    async with lock:
+        _prune_session_page_pool(session)
+        if session.leased_page_ids:
+            return
+        _BROWSER_SESSIONS.pop(session.key, None)
+
+    await _discard_browser_session(session.key, session)
 
 
 class WuddChatGPTBrowser:
@@ -1732,7 +1848,11 @@ class WuddChatGPTBrowser:
             except BaseException:
                 for task in tasks:
                     task.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
+                done, pending = await asyncio.wait(tasks, timeout=5.0)
+                for task in done:
+                    _consume_task_exception(task)
+                for task in pending:
+                    task.add_done_callback(_consume_task_exception)
                 raise
             return _merge_batch_results(results)
 
@@ -1747,29 +1867,25 @@ class WuddChatGPTBrowser:
         chatgpt_url = _normalize_url(chatgpt_url, DEFAULT_CHATGPT_URL)
         cdp_base, _, _ = _normalize_cdp_url(cdp_url)
         upload_path = None
-        spawned = None
-        browser = None
+        browser_session = None
         page = None
-        page_slot = None
+        page_id = None
         image_collector = None
         _check_interrupted()
-        playwright = await _await_interruptible(async_playwright().start())
 
         try:
-            async with _browser_execution_lock():
-                _check_interrupted()
-                browser, context, spawned = await _connect_browser(
-                    playwright,
-                    connection_mode,
-                    cdp_base,
-                    browser_executable,
-                    profile_mode,
-                    user_data_dir,
-                    profile_directory,
-                    chatgpt_url,
-                )
-            page, page_slot = await _get_chatgpt_page(
-                context,
+            browser_session = await _get_browser_session(
+                async_playwright,
+                connection_mode,
+                cdp_base,
+                browser_executable,
+                profile_mode,
+                user_data_dir,
+                profile_directory,
+                chatgpt_url,
+            )
+            page, page_id = await _get_chatgpt_page(
+                browser_session,
                 chatgpt_url,
                 bool(new_chat),
                 parallel_pages,
@@ -1814,12 +1930,13 @@ class WuddChatGPTBrowser:
         except BaseException:
             if page is not None:
                 await _try_stop_response(page)
+                await _close_page_quietly(page)
             raise
         finally:
             if image_collector is not None:
                 image_collector.stop()
-            if page_slot is not None:
-                await _release_chatgpt_page_slot(page_slot)
+            if page_id is not None:
+                await _release_chatgpt_page_slot(browser_session, page_id)
 
             if upload_path and os.path.exists(upload_path):
                 try:
@@ -1827,15 +1944,7 @@ class WuddChatGPTBrowser:
                 except OSError:
                     pass
 
-            if spawned is not None and not bool(keep_browser_open):
-                if browser is not None:
-                    try:
-                        await browser.close()
-                    except Exception:
-                        pass
-                if spawned.poll() is None:
-                    spawned.terminate()
-            await playwright.stop()
+            await _maybe_close_spawned_browser_session(browser_session, keep_browser_open)
 
 
 __all__ = ["WuddChatGPTBrowser"]
