@@ -7,6 +7,7 @@ logged in inside the browser profile used by the node.
 """
 
 import asyncio
+import base64
 import hashlib
 import json
 import os
@@ -136,6 +137,58 @@ STREAMING_SCRIPT = """
       label.includes("停止") ||
       label.includes("cancel response");
   });
+}
+"""
+
+MEDIA_TO_DATA_URL_SCRIPT = """
+async (el) => {
+  const tag = (el.tagName || "").toLowerCase();
+
+  function canvasFromImage(img) {
+    const width = img.naturalWidth || img.videoWidth || img.width;
+    const height = img.naturalHeight || img.videoHeight || img.height;
+    if (!width || !height) return null;
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(img, 0, 0, width, height);
+    return canvas;
+  }
+
+  function blobToDataURL(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  if (tag === "canvas") {
+    return el.toDataURL("image/png");
+  }
+
+  if (tag !== "img") return null;
+
+  try {
+    if (el.decode) await el.decode();
+  } catch (_) {}
+
+  const src = el.currentSrc || el.src || "";
+  if (src.startsWith("data:")) return src;
+
+  if (src) {
+    try {
+      const response = await fetch(src);
+      if (response.ok) {
+        return await blobToDataURL(await response.blob());
+      }
+    } catch (_) {}
+  }
+
+  const canvas = canvasFromImage(el);
+  return canvas ? canvas.toDataURL("image/png") : null;
 }
 """
 
@@ -391,6 +444,33 @@ def _pil_images_to_tensor_batch(images):
     return torch.cat(tensors, dim=0)
 
 
+def _pil_from_data_url(data_url):
+    if not data_url or "," not in data_url:
+        return None
+    header, payload = data_url.split(",", 1)
+    if ";base64" not in header:
+        return None
+    raw = base64.b64decode(payload)
+    image = Image.open(BytesIO(raw))
+    image.load()
+    return image.convert("RGB")
+
+
+async def _media_locator_to_pil(locator, timeout_ms):
+    try:
+        data_url = await locator.evaluate(MEDIA_TO_DATA_URL_SCRIPT, timeout=timeout_ms)
+        image = _pil_from_data_url(data_url)
+        if image is not None:
+            return image
+    except Exception:
+        pass
+
+    raw_png = await locator.screenshot(type="png", timeout=timeout_ms)
+    image = Image.open(BytesIO(raw_png))
+    image.load()
+    return image.convert("RGB")
+
+
 async def _visible_media_images(container, timeout_seconds):
     timeout_ms = max(1000, int(float(timeout_seconds) * 1000))
     images = []
@@ -405,10 +485,7 @@ async def _visible_media_images(container, timeout_seconds):
             if not box or box["width"] < 32 or box["height"] < 32:
                 continue
             await locator.scroll_into_view_if_needed(timeout=timeout_ms)
-            raw_png = await locator.screenshot(type="png", timeout=timeout_ms)
-            pil_img = Image.open(BytesIO(raw_png))
-            pil_img.load()
-            images.append(pil_img.convert("RGB"))
+            images.append(await _media_locator_to_pil(locator, timeout_ms))
         except Exception:
             continue
     return images
