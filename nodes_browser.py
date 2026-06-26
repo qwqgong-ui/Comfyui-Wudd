@@ -256,26 +256,31 @@ GENERATED_IMAGE_URLS_SCRIPT = """
     return /^chatgpt_[a-z0-9_-]+\\.(png|jpe?g|webp)$/.test(filename);
   }
 
+  function hasGeneratedAlt(img) {
+    const alt = img.getAttribute("alt") || "";
+    return alt.includes("已生成图片") ||
+      alt.toLowerCase().includes("generated image");
+  }
+
+  function isGeneratedCandidate(img) {
+    if (isUploadThumbnail(img)) return false;
+    if (img.closest('[data-message-author-role="user"]')) return false;
+    if (img.closest('form')) return false;
+
+    const src = img.currentSrc || img.src || img.getAttribute("src") || "";
+    if (!src) return false;
+    const value = src.toLowerCase();
+    if (!needles.some((needle) => value.includes(needle))) return false;
+
+    const rect = img.getBoundingClientRect();
+    if ((rect.width || 0) < 64 || (rect.height || 0) < 64) return false;
+    return hasGeneratedAlt(img) || !img.closest('[data-message-author-role]');
+  }
+
   for (const img of document.querySelectorAll("img")) {
-    if (isUploadThumbnail(img)) continue;
+    if (!isGeneratedCandidate(img)) continue;
     add(img.currentSrc || img.src);
     addSrcset(img.getAttribute("srcset"));
-  }
-
-  for (const source of document.querySelectorAll("source")) {
-    add(source.src);
-    addSrcset(source.getAttribute("srcset"));
-  }
-
-  for (const link of document.querySelectorAll("a")) {
-    add(link.href);
-  }
-
-  for (const el of document.querySelectorAll("[style]")) {
-    const bg = getComputedStyle(el).backgroundImage || "";
-    for (const match of bg.matchAll(/url\\(["']?([^"')]+)["']?\\)/g)) {
-      add(match[1]);
-    }
   }
 
   return urls;
@@ -293,7 +298,11 @@ IMAGE_ELEMENT_METADATA_SCRIPT = """
     tag,
     url,
     alt: el.getAttribute("alt") || "",
-    className: String(el.getAttribute("class") || "")
+    className: String(el.getAttribute("class") || ""),
+    role: el.closest('[data-message-author-role]')?.getAttribute('data-message-author-role') || "",
+    inForm: !!el.closest("form"),
+    naturalWidth: el.naturalWidth || 0,
+    naturalHeight: el.naturalHeight || 0
   };
 }
 """
@@ -733,6 +742,20 @@ def _looks_like_upload_thumbnail(meta):
     return False
 
 
+def _looks_like_generated_image_meta(meta):
+    alt = str((meta or {}).get("alt") or "")
+    url = str((meta or {}).get("url") or "")
+    if not _looks_like_chatgpt_image_url(url):
+        return False
+    if _looks_like_upload_thumbnail(meta):
+        return False
+    if str((meta or {}).get("role") or "").lower() == "user":
+        return False
+    if bool((meta or {}).get("inForm")):
+        return False
+    return "已生成图片" in alt or "generated image" in alt.lower() or not (meta or {}).get("role")
+
+
 def _is_candidate_generated_image(image, strong_match=False):
     if image is None:
         return False
@@ -881,7 +904,7 @@ class _ImageResponseCollector:
         return list(self.images)
 
 
-async def _media_locator_to_pil(locator, timeout_ms):
+async def _media_locator_to_pil(locator, timeout_ms, allow_screenshot=True):
     try:
         data_url = await locator.evaluate(MEDIA_TO_DATA_URL_SCRIPT, timeout=timeout_ms)
         image = _pil_from_data_url(data_url)
@@ -889,6 +912,9 @@ async def _media_locator_to_pil(locator, timeout_ms):
             return image
     except Exception:
         pass
+
+    if not allow_screenshot:
+        return None
 
     raw_png = await locator.screenshot(type="png", timeout=timeout_ms)
     image = Image.open(BytesIO(raw_png))
@@ -948,6 +974,7 @@ async def _visible_media_images(
     selector="img, canvas",
     min_size=32,
     ignored_keys=None,
+    require_generated_meta=False,
 ):
     timeout_ms = max(1000, int(float(timeout_seconds) * 1000))
     images = []
@@ -963,11 +990,26 @@ async def _visible_media_images(
                 continue
             if _looks_like_upload_thumbnail(meta):
                 continue
+            if str((meta or {}).get("role") or "").lower() == "user":
+                continue
+            if bool((meta or {}).get("inForm")):
+                continue
+            if require_generated_meta and not _looks_like_generated_image_meta(meta):
+                continue
             box = await locator.bounding_box()
             if not box or box["width"] < min_size or box["height"] < min_size:
                 continue
             await locator.scroll_into_view_if_needed(timeout=timeout_ms)
-            images.append(await _media_locator_to_pil(locator, timeout_ms))
+            natural_width = int((meta or {}).get("naturalWidth") or 0)
+            natural_height = int((meta or {}).get("naturalHeight") or 0)
+            url = (meta or {}).get("url")
+            allow_screenshot = not (
+                _looks_like_chatgpt_image_url(url) and
+                (natural_width < min_size or natural_height < min_size)
+            )
+            image = await _media_locator_to_pil(locator, timeout_ms, allow_screenshot=allow_screenshot)
+            if image is not None:
+                images.append(image)
         except Exception:
             continue
     return images
@@ -998,6 +1040,7 @@ async def _visible_generated_media_images(
         selector=selector,
         min_size=64,
         ignored_keys=ignored_keys,
+        require_generated_meta=True,
     )
     return _dedupe_images(
         (image for image in images if _is_candidate_generated_image(image, strong_match=True)),
@@ -1076,7 +1119,7 @@ async def _collect_response_images(
         (collector.ignored_fingerprints if collector is not None else None)
     )
     if collector is not None:
-        images.extend(await collector.drain(0.25))
+        await collector.drain(0.25)
     images.extend(await _latest_assistant_images(
         page,
         timeout_seconds,
@@ -1121,7 +1164,7 @@ async def _wait_for_response_images(
         await asyncio.sleep(0.75)
 
     if collector is not None:
-        return _dedupe_images(await collector.drain(2.0))
+        await collector.drain(2.0)
     return []
 
 
