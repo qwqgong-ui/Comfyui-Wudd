@@ -630,6 +630,28 @@ def _dedupe_images(images):
     return deduped
 
 
+def _prompt_likely_requests_image(prompt):
+    text = str(prompt or "").lower()
+    keywords = (
+        "image",
+        "picture",
+        "photo",
+        "render",
+        "illustration",
+        "poster",
+        "thumbnail",
+        "cover",
+        "product shot",
+        "\u56fe",
+        "\u56fe\u7247",
+        "\u56fe\u50cf",
+        "\u4e3b\u56fe",
+        "\u6d77\u62a5",
+        "\u6444\u5f71",
+    )
+    return any(keyword in text for keyword in keywords)
+
+
 def _pil_from_data_url(data_url):
     if not data_url or "," not in data_url:
         return None
@@ -788,12 +810,16 @@ async def _visible_media_images(container, timeout_seconds, selector="img, canva
 async def _visible_generated_media_images(page, timeout_seconds):
     selector = (
         'img[src*="/backend-api/estuary/content"], '
+        'img[src*="backend-api/estuary/content"], '
         'img[src*="/backend-api/files"], '
+        'img[src*="backend-api/files"], '
         'img[src*="/backend-api/file"], '
+        'img[src*="backend-api/file"], '
         'img[src*="files.oaiusercontent.com"], '
         'img[src*="oaiusercontent.com"], '
         'img[src*="oaidalle"], '
-        'img[src*="dalle"]'
+        'img[src*="dalle"], '
+        'img[alt*="\u5df2\u751f\u6210\u56fe\u7247"]'
     )
     images = await _visible_media_images(page, timeout_seconds, selector=selector, min_size=64)
     return _dedupe_images(
@@ -802,6 +828,14 @@ async def _visible_generated_media_images(page, timeout_seconds):
 
 
 async def _latest_assistant_images(page, timeout_seconds):
+    images = await _visible_generated_media_images(page, timeout_seconds)
+    if images:
+        return images
+
+    images = await _generated_url_images(page, timeout_seconds)
+    if images:
+        return images
+
     containers = page.locator('[data-message-author-role="assistant"]')
     count = await containers.count()
     for index in range(count - 1, -1, -1):
@@ -828,28 +862,33 @@ async def _latest_assistant_images(page, timeout_seconds):
         if images:
             return images
 
-    images = await _generated_url_images(page, timeout_seconds)
-    if images:
-        return images
-
-    images = await _visible_generated_media_images(page, timeout_seconds)
-    if images:
-        return images
-
     return []
 
 
-async def _wait_for_response_images(page, collector, timeout_seconds):
-    max_wait = min(30.0, max(5.0, float(timeout_seconds) * 0.1))
+async def _collect_response_images(page, collector, timeout_seconds):
+    images = []
+    if collector is not None:
+        images.extend(await collector.drain(0.25))
+    images.extend(await _latest_assistant_images(page, timeout_seconds))
+    return _dedupe_images(images)
+
+
+async def _wait_for_response_images(
+    page,
+    collector,
+    timeout_seconds,
+    max_wait_seconds=None,
+    stop_when_idle=True,
+):
+    if max_wait_seconds is None:
+        max_wait = min(30.0, max(5.0, float(timeout_seconds) * 0.1))
+    else:
+        max_wait = max(1.0, min(float(timeout_seconds), float(max_wait_seconds)))
     deadline = time.monotonic() + max_wait
     not_streaming_since = None
 
     while True:
-        images = []
-        if collector is not None:
-            images.extend(await collector.drain(0.25))
-        images.extend(await _latest_assistant_images(page, min(5.0, float(timeout_seconds))))
-        images = _dedupe_images(images)
+        images = await _collect_response_images(page, collector, min(5.0, float(timeout_seconds)))
         if images:
             return images
 
@@ -857,13 +896,14 @@ async def _wait_for_response_images(page, collector, timeout_seconds):
         if now >= deadline:
             break
 
-        if await _is_streaming(page):
-            not_streaming_since = None
-        else:
-            if not_streaming_since is None:
-                not_streaming_since = now
-            elif now - not_streaming_since >= 5.0:
-                break
+        if stop_when_idle:
+            if await _is_streaming(page):
+                not_streaming_since = None
+            else:
+                if not_streaming_since is None:
+                    not_streaming_since = now
+                elif now - not_streaming_since >= 5.0:
+                    break
 
         await asyncio.sleep(0.75)
 
@@ -979,6 +1019,54 @@ async def _wait_for_response(page, previous_count, timeout_seconds, stable_secon
     if last_text:
         return last_text
     raise TimeoutError("Timed out waiting for ChatGPT response text.")
+
+
+async def _wait_for_response_result(page, collector, previous_count, timeout_seconds, stable_seconds, prompt):
+    deadline = time.monotonic() + max(1.0, float(timeout_seconds))
+    stable_seconds = max(0.5, float(stable_seconds))
+    image_expected = _prompt_likely_requests_image(prompt)
+    last_text = ""
+    last_change = time.monotonic()
+    started = False
+    text_ready = False
+
+    while time.monotonic() < deadline:
+        images = await _collect_response_images(page, collector, min(3.0, float(timeout_seconds)))
+        if images:
+            return last_text, images
+
+        texts = await _assistant_texts(page)
+        current = ""
+        if len(texts) > previous_count:
+            started = True
+            current = texts[-1]
+        elif started and texts:
+            current = texts[-1]
+
+        if current and current != last_text:
+            last_text = current
+            last_change = time.monotonic()
+            text_ready = False
+
+        streaming = await _is_streaming(page)
+        if last_text and started and not streaming and time.monotonic() - last_change >= stable_seconds:
+            if not image_expected:
+                images = await _wait_for_response_images(
+                    page,
+                    collector,
+                    timeout_seconds,
+                    max_wait_seconds=5.0,
+                    stop_when_idle=True,
+                )
+                return last_text, images
+            text_ready = True
+
+        await asyncio.sleep(0.5 if not text_ready else 1.0)
+
+    images = await _collect_response_images(page, collector, min(5.0, float(timeout_seconds)))
+    if images or last_text:
+        return last_text, images
+    raise TimeoutError("Timed out waiting for ChatGPT response text or image.")
 
 
 async def _get_chatgpt_page(context, chatgpt_url, new_chat):
@@ -1189,13 +1277,14 @@ class WuddChatGPTBrowser:
                 if not await _response_started(page, previous_count):
                     await _click_send_button(page, 5, required=False)
 
-            text = await _wait_for_response(
+            text, images = await _wait_for_response_result(
                 page,
+                image_collector,
                 previous_count,
                 wait_timeout_seconds,
                 stable_seconds,
+                prompt,
             )
-            images = await _wait_for_response_images(page, image_collector, wait_timeout_seconds)
             return (text, page.url, _pil_images_to_tensor_batch(images), len(images))
         finally:
             if image_collector is not None:
