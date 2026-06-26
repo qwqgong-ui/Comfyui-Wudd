@@ -249,7 +249,14 @@ GENERATED_IMAGE_URLS_SCRIPT = """
     }
   }
 
+  function isUploadThumbnail(img) {
+    const alt = (img.getAttribute("alt") || "").trim().toLowerCase();
+    const filename = alt.split(/[\\\\/]/).pop();
+    return /^chatgpt_[a-z0-9_-]+\\.(png|jpe?g|webp)$/.test(filename);
+  }
+
   for (const img of document.querySelectorAll("img")) {
+    if (isUploadThumbnail(img)) continue;
     add(img.currentSrc || img.src);
     addSrcset(img.getAttribute("srcset"));
   }
@@ -271,6 +278,22 @@ GENERATED_IMAGE_URLS_SCRIPT = """
   }
 
   return urls;
+}
+"""
+
+IMAGE_ELEMENT_METADATA_SCRIPT = """
+(el) => {
+  const tag = (el.tagName || "").toLowerCase();
+  let url = "";
+  if (tag === "img" || tag === "source") {
+    url = el.currentSrc || el.src || el.getAttribute("src") || "";
+  }
+  return {
+    tag,
+    url,
+    alt: el.getAttribute("alt") || "",
+    className: String(el.getAttribute("class") || "")
+  };
 }
 """
 
@@ -600,6 +623,53 @@ def _looks_like_chatgpt_image_url(url):
     )
 
 
+def _normalize_image_url(url):
+    return str(url or "").replace("&amp;", "&").strip()
+
+
+def _chatgpt_file_id(url):
+    try:
+        query = urlparse(_normalize_image_url(url)).query
+    except Exception:
+        return ""
+    for part in query.split("&"):
+        if part.startswith("id="):
+            return part[3:]
+    return ""
+
+
+def _image_url_keys(url):
+    value = _normalize_image_url(url)
+    keys = set()
+    if value:
+        keys.add(value)
+    file_id = _chatgpt_file_id(value)
+    if file_id:
+        keys.add(f"id:{file_id}")
+    return keys
+
+
+def _image_url_key_set(urls):
+    keys = set()
+    for url in urls or []:
+        keys.update(_image_url_keys(url))
+    return keys
+
+
+def _image_url_is_ignored(url, ignored_keys):
+    if not ignored_keys:
+        return False
+    return bool(_image_url_keys(url) & set(ignored_keys))
+
+
+def _looks_like_upload_thumbnail(meta):
+    alt = str((meta or {}).get("alt") or "").strip().lower()
+    filename = alt.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    if filename.startswith("chatgpt_") and filename.endswith((".png", ".jpg", ".jpeg", ".webp")):
+        return True
+    return False
+
+
 def _is_candidate_generated_image(image, strong_match=False):
     if image is None:
         return False
@@ -616,13 +686,16 @@ def _image_fingerprint(image):
     return hasher.hexdigest()
 
 
-def _dedupe_images(images):
+def _dedupe_images(images, ignored_fingerprints=None):
     deduped = []
     seen = set()
+    ignored_fingerprints = set(ignored_fingerprints or [])
     for image in images:
         if image is None:
             continue
         key = _image_fingerprint(image)
+        if key in ignored_fingerprints:
+            continue
         if key in seen:
             continue
         seen.add(key)
@@ -671,10 +744,12 @@ def _pil_from_response_bytes(raw):
 
 
 class _ImageResponseCollector:
-    def __init__(self, page):
+    def __init__(self, page, ignored_urls=None, ignored_fingerprints=None):
         self.page = page
         self.images = []
         self._raw_hashes = set()
+        self.ignored_keys = _image_url_key_set(ignored_urls)
+        self.ignored_fingerprints = set(ignored_fingerprints or [])
         self._tasks = set()
         self._started = False
 
@@ -701,6 +776,8 @@ class _ImageResponseCollector:
     async def _capture_response(self, response):
         try:
             url = response.url
+            if _image_url_is_ignored(url, self.ignored_keys):
+                return
             headers = response.headers or {}
             content_type = str(headers.get("content-type") or "").lower()
             strong_match = _looks_like_chatgpt_image_url(url)
@@ -718,6 +795,8 @@ class _ImageResponseCollector:
 
             image = _pil_from_response_bytes(raw)
             if not _is_candidate_generated_image(image, strong_match=strong_match):
+                return
+            if _image_fingerprint(image) in self.ignored_fingerprints:
                 return
 
             self._raw_hashes.add(raw_hash)
@@ -765,29 +844,48 @@ async def _url_to_pil_via_page(page, url, timeout_seconds):
         return None
 
 
-async def _generated_url_images(page, timeout_seconds):
+async def _page_known_image_urls(page):
     try:
         urls = await page.evaluate(GENERATED_IMAGE_URLS_SCRIPT)
     except Exception:
         return []
+    return [_normalize_image_url(url) for url in urls or []]
 
+
+async def _generated_url_images(
+    page,
+    timeout_seconds,
+    ignored_keys=None,
+    ignored_fingerprints=None,
+):
+    urls = await _page_known_image_urls(page)
     images = []
     seen_urls = set()
     per_url_timeout = min(10.0, max(1.0, float(timeout_seconds)))
     for url in reversed(urls or []):
         if url in seen_urls:
             continue
+        if _image_url_is_ignored(url, ignored_keys):
+            continue
         seen_urls.add(url)
         image = await _url_to_pil_via_page(page, url, per_url_timeout)
         if not _is_candidate_generated_image(image, strong_match=True):
             continue
+        if _image_fingerprint(image) in set(ignored_fingerprints or []):
+            continue
         images.append(image)
         if len(images) >= 4:
             break
-    return list(reversed(_dedupe_images(images)))
+    return list(reversed(_dedupe_images(images, ignored_fingerprints=ignored_fingerprints)))
 
 
-async def _visible_media_images(container, timeout_seconds, selector="img, canvas", min_size=32):
+async def _visible_media_images(
+    container,
+    timeout_seconds,
+    selector="img, canvas",
+    min_size=32,
+    ignored_keys=None,
+):
     timeout_ms = max(1000, int(float(timeout_seconds) * 1000))
     images = []
     media = container.locator(selector)
@@ -796,6 +894,11 @@ async def _visible_media_images(container, timeout_seconds, selector="img, canva
         locator = media.nth(index)
         try:
             if not await locator.is_visible():
+                continue
+            meta = await locator.evaluate(IMAGE_ELEMENT_METADATA_SCRIPT, timeout=timeout_ms)
+            if _image_url_is_ignored((meta or {}).get("url"), ignored_keys):
+                continue
+            if _looks_like_upload_thumbnail(meta):
                 continue
             box = await locator.bounding_box()
             if not box or box["width"] < min_size or box["height"] < min_size:
@@ -807,7 +910,12 @@ async def _visible_media_images(container, timeout_seconds, selector="img, canva
     return images
 
 
-async def _visible_generated_media_images(page, timeout_seconds):
+async def _visible_generated_media_images(
+    page,
+    timeout_seconds,
+    ignored_keys=None,
+    ignored_fingerprints=None,
+):
     selector = (
         'img[src*="/backend-api/estuary/content"], '
         'img[src*="backend-api/estuary/content"], '
@@ -821,25 +929,51 @@ async def _visible_generated_media_images(page, timeout_seconds):
         'img[src*="dalle"], '
         'img[alt*="\u5df2\u751f\u6210\u56fe\u7247"]'
     )
-    images = await _visible_media_images(page, timeout_seconds, selector=selector, min_size=64)
+    images = await _visible_media_images(
+        page,
+        timeout_seconds,
+        selector=selector,
+        min_size=64,
+        ignored_keys=ignored_keys,
+    )
     return _dedupe_images(
-        image for image in images if _is_candidate_generated_image(image, strong_match=True)
+        (image for image in images if _is_candidate_generated_image(image, strong_match=True)),
+        ignored_fingerprints=ignored_fingerprints,
     )
 
 
-async def _latest_assistant_images(page, timeout_seconds):
-    images = await _visible_generated_media_images(page, timeout_seconds)
+async def _latest_assistant_images(
+    page,
+    timeout_seconds,
+    ignored_keys=None,
+    ignored_fingerprints=None,
+):
+    images = await _visible_generated_media_images(
+        page,
+        timeout_seconds,
+        ignored_keys=ignored_keys,
+        ignored_fingerprints=ignored_fingerprints,
+    )
     if images:
         return images
 
-    images = await _generated_url_images(page, timeout_seconds)
+    images = await _generated_url_images(
+        page,
+        timeout_seconds,
+        ignored_keys=ignored_keys,
+        ignored_fingerprints=ignored_fingerprints,
+    )
     if images:
         return images
 
     containers = page.locator('[data-message-author-role="assistant"]')
     count = await containers.count()
     for index in range(count - 1, -1, -1):
-        images = await _visible_media_images(containers.nth(index), timeout_seconds)
+        images = await _visible_media_images(
+            containers.nth(index),
+            timeout_seconds,
+            ignored_keys=ignored_keys,
+        )
         if images:
             return images
 
@@ -858,19 +992,35 @@ async def _latest_assistant_images(page, timeout_seconds):
         except Exception:
             continue
 
-        images = await _visible_media_images(article, timeout_seconds)
+        images = await _visible_media_images(article, timeout_seconds, ignored_keys=ignored_keys)
         if images:
             return images
 
     return []
 
 
-async def _collect_response_images(page, collector, timeout_seconds):
+async def _collect_response_images(
+    page,
+    collector,
+    timeout_seconds,
+    ignored_keys=None,
+    ignored_fingerprints=None,
+):
     images = []
+    effective_ignored_keys = ignored_keys or (collector.ignored_keys if collector is not None else None)
+    effective_ignored_fingerprints = (
+        ignored_fingerprints or
+        (collector.ignored_fingerprints if collector is not None else None)
+    )
     if collector is not None:
         images.extend(await collector.drain(0.25))
-    images.extend(await _latest_assistant_images(page, timeout_seconds))
-    return _dedupe_images(images)
+    images.extend(await _latest_assistant_images(
+        page,
+        timeout_seconds,
+        ignored_keys=effective_ignored_keys,
+        ignored_fingerprints=effective_ignored_fingerprints,
+    ))
+    return _dedupe_images(images, ignored_fingerprints=effective_ignored_fingerprints)
 
 
 async def _wait_for_response_images(
@@ -1258,14 +1408,21 @@ class WuddChatGPTBrowser:
             page = await _get_chatgpt_page(context, chatgpt_url, bool(new_chat))
             composer = await _first_visible_locator(page, COMPOSER_SELECTORS, wait_timeout_seconds)
             previous_count = len(await _assistant_texts(page))
+            ignored_image_fingerprints = set()
 
             if image is not None:
+                ignored_image_fingerprints.add(_image_fingerprint(tensor_to_pil(image).convert("RGB")))
                 upload_path = _make_upload_png(image)
                 await _attach_image_file(page, upload_path, wait_timeout_seconds)
                 if float(upload_wait_seconds) > 0:
                     await asyncio.sleep(float(upload_wait_seconds))
 
-            image_collector = _ImageResponseCollector(page)
+            ignored_image_urls = await _page_known_image_urls(page)
+            image_collector = _ImageResponseCollector(
+                page,
+                ignored_urls=ignored_image_urls,
+                ignored_fingerprints=ignored_image_fingerprints,
+            )
             image_collector.start()
             await _fill_composer(composer, page, prompt)
 
