@@ -1,0 +1,739 @@
+"""
+Browser automation nodes for ComfyUI-Wudd.
+
+This module drives the user's own Chrome/Edge browser through the Chrome
+DevTools Protocol. It does not handle credentials; the user keeps ChatGPT
+logged in inside the browser profile used by the node.
+"""
+
+import asyncio
+import hashlib
+import json
+import os
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+from io import BytesIO
+from urllib.error import URLError
+from urllib.parse import urlparse
+from urllib.request import urlopen
+
+import numpy as np
+import folder_paths
+from PIL import Image
+
+from .nodes_common import CREATE_NO_WINDOW, WUDD_CATEGORY, tensor_to_pil
+
+
+BROWSER_CATEGORY = f"{WUDD_CATEGORY}/Browser"
+DEFAULT_CHATGPT_URL = "https://chatgpt.com/"
+DEFAULT_CDP_URL = "http://127.0.0.1:9222"
+BROWSER_CONNECTION_MODES = [
+    "connect_or_launch_edge",
+    "connect_or_launch_chrome",
+    "connect_cdp",
+    "launch_chrome",
+    "launch_edge",
+]
+SUBMIT_ACTIONS = ["press_enter", "click_send_button"]
+
+COMPOSER_SELECTORS = [
+    '#prompt-textarea[contenteditable="true"]',
+    'textarea#prompt-textarea',
+    '[data-testid="composer"] [contenteditable="true"]',
+    'form [contenteditable="true"][role="textbox"]',
+    '[contenteditable="true"][role="textbox"]',
+    'textarea[placeholder*="Message"]',
+    'textarea[placeholder*="Send"]',
+    'textarea',
+]
+
+SEND_BUTTON_SELECTORS = [
+    '[data-testid="send-button"]',
+    'button[aria-label*="Send"]',
+    'button[aria-label*="send"]',
+    'button[aria-label*="发送"]',
+]
+
+ATTACH_BUTTON_SELECTORS = [
+    'button[aria-label*="Attach"]',
+    'button[aria-label*="attach"]',
+    'button[aria-label*="Add"]',
+    'button[aria-label*="add"]',
+    'button[aria-label*="file"]',
+    'button[aria-label*="File"]',
+    'button[aria-label*="photo"]',
+    'button[aria-label*="Photo"]',
+    'button[aria-label*="Upload"]',
+    'button[aria-label*="upload"]',
+    'button[aria-label*="添加"]',
+    'button[aria-label*="上传"]',
+    'button[title*="Attach"]',
+    'button[title*="Upload"]',
+    '[data-testid="attach-file-button"]',
+    '[data-testid*="attach"]',
+    '[data-testid*="upload"]',
+    '[data-testid*="composer-plus"]',
+    '[data-testid*="plus"]',
+]
+
+ASSISTANT_TEXT_SCRIPT = """
+() => {
+  const texts = [];
+  const seen = new Set();
+
+  function isVisible(el) {
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      rect.width > 0 &&
+      rect.height > 0;
+  }
+
+  function addText(el) {
+    if (!el || seen.has(el) || !isVisible(el)) return;
+    seen.add(el);
+    const text = (el.innerText || el.textContent || "").trim();
+    if (text) texts.push(text);
+  }
+
+  for (const el of document.querySelectorAll('[data-message-author-role="assistant"]')) {
+    addText(el);
+  }
+
+  if (texts.length) return texts;
+
+  for (const article of document.querySelectorAll("article")) {
+    const label = (
+      article.getAttribute("aria-label") ||
+      article.getAttribute("data-testid") ||
+      ""
+    ).toLowerCase();
+    if (label.includes("assistant") || label.includes("chatgpt")) {
+      addText(article);
+    }
+  }
+
+  return texts;
+}
+"""
+
+STREAMING_SCRIPT = """
+() => {
+  const buttons = Array.from(document.querySelectorAll("button"));
+  return buttons.some((button) => {
+    const label = (
+      button.getAttribute("aria-label") ||
+      button.getAttribute("title") ||
+      button.innerText ||
+      ""
+    ).toLowerCase();
+    return label.includes("stop") ||
+      label.includes("停止") ||
+      label.includes("cancel response");
+  });
+}
+"""
+
+
+def _hash_value(hasher, value):
+    if hasattr(value, "detach") and hasattr(value, "cpu"):
+        arr = value.detach().cpu().numpy()
+        hasher.update(str(arr.shape).encode("utf-8"))
+        hasher.update(arr.tobytes())
+        return
+    if isinstance(value, np.ndarray):
+        hasher.update(str(value.shape).encode("utf-8"))
+        hasher.update(value.tobytes())
+        return
+    if isinstance(value, dict):
+        for key in sorted(value):
+            _hash_value(hasher, key)
+            _hash_value(hasher, value[key])
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _hash_value(hasher, item)
+        return
+    hasher.update(str(value).encode("utf-8"))
+    hasher.update(b"\x00")
+
+
+def _stable_hash(*args, **kwargs):
+    hasher = hashlib.sha256()
+    _hash_value(hasher, args)
+    _hash_value(hasher, kwargs)
+    return hasher.hexdigest()
+
+
+def _normalize_url(url, default):
+    url = str(url or "").strip() or default
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+    return url
+
+
+def _normalize_cdp_url(cdp_url):
+    cdp_url = str(cdp_url or "").strip() or DEFAULT_CDP_URL
+    if not cdp_url.startswith(("http://", "https://")):
+        cdp_url = "http://" + cdp_url
+
+    parsed = urlparse(cdp_url)
+    scheme = parsed.scheme or "http"
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or (443 if scheme == "https" else 80)
+    return f"{scheme}://{host}:{port}", host, port
+
+
+def _cdp_version_url(cdp_url):
+    base, _, _ = _normalize_cdp_url(cdp_url)
+    return base.rstrip("/") + "/json/version"
+
+
+def _is_cdp_ready(cdp_url):
+    try:
+        with urlopen(_cdp_version_url(cdp_url), timeout=1.0) as response:
+            json.loads(response.read().decode("utf-8", errors="replace"))
+            return True
+    except (OSError, URLError, json.JSONDecodeError):
+        return False
+
+
+def _wait_for_cdp(cdp_url, timeout_seconds):
+    deadline = time.monotonic() + max(1.0, float(timeout_seconds))
+    while time.monotonic() < deadline:
+        if _is_cdp_ready(cdp_url):
+            return
+        time.sleep(0.25)
+    raise TimeoutError(f"Browser CDP endpoint did not become ready: {_cdp_version_url(cdp_url)}")
+
+
+def _port_is_free(host, port):
+    try:
+        with socket.create_connection((host, int(port)), timeout=0.5):
+            return False
+    except OSError:
+        return True
+
+
+def _expand_path(path):
+    return os.path.abspath(os.path.expandvars(os.path.expanduser(str(path or "").strip())))
+
+
+def _default_user_data_dir(browser_name):
+    root = os.path.join(folder_paths.get_user_directory(), "wudd_browser_profiles")
+    return os.path.join(root, browser_name)
+
+
+def _candidate_paths(browser_name):
+    paths = []
+    if browser_name == "edge":
+        paths.extend([
+            shutil.which("msedge"),
+            shutil.which("msedge.exe"),
+        ])
+        if sys.platform == "win32":
+            paths.extend([
+                os.path.join(os.environ.get("PROGRAMFILES", ""), "Microsoft", "Edge", "Application", "msedge.exe"),
+                os.path.join(os.environ.get("PROGRAMFILES(X86)", ""), "Microsoft", "Edge", "Application", "msedge.exe"),
+                os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "Edge", "Application", "msedge.exe"),
+            ])
+        elif sys.platform == "darwin":
+            paths.append("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge")
+        else:
+            paths.extend([
+                shutil.which("microsoft-edge"),
+                shutil.which("microsoft-edge-stable"),
+            ])
+    else:
+        paths.extend([
+            shutil.which("chrome"),
+            shutil.which("chrome.exe"),
+            shutil.which("google-chrome"),
+            shutil.which("google-chrome-stable"),
+            shutil.which("chromium"),
+            shutil.which("chromium-browser"),
+        ])
+        if sys.platform == "win32":
+            paths.extend([
+                os.path.join(os.environ.get("PROGRAMFILES", ""), "Google", "Chrome", "Application", "chrome.exe"),
+                os.path.join(os.environ.get("PROGRAMFILES(X86)", ""), "Google", "Chrome", "Application", "chrome.exe"),
+                os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "Application", "chrome.exe"),
+            ])
+        elif sys.platform == "darwin":
+            paths.append("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+    return [path for path in paths if path]
+
+
+def _resolve_browser_executable(browser_name, browser_executable):
+    override = str(browser_executable or "").strip()
+    if override:
+        path = _expand_path(override)
+        if os.path.isfile(path):
+            return path
+        raise ValueError(f"Browser executable does not exist: {path}")
+
+    for path in _candidate_paths(browser_name):
+        if os.path.isfile(path):
+            return path
+
+    label = "Microsoft Edge" if browser_name == "edge" else "Google Chrome/Chromium"
+    raise ValueError(
+        f"{label} executable was not found. Set browser_executable to the full browser path."
+    )
+
+
+def _launch_browser(browser_name, cdp_url, browser_executable, user_data_dir, chatgpt_url):
+    cdp_base, host, port = _normalize_cdp_url(cdp_url)
+    if _is_cdp_ready(cdp_base):
+        return None
+    if not _port_is_free(host, port):
+        raise RuntimeError(
+            f"Port {host}:{port} is already in use, but it is not a Chrome CDP endpoint."
+        )
+
+    executable = _resolve_browser_executable(browser_name, browser_executable)
+    profile_dir = _expand_path(user_data_dir) if str(user_data_dir or "").strip() else _default_user_data_dir(browser_name)
+    os.makedirs(profile_dir, exist_ok=True)
+
+    cmd = [
+        executable,
+        f"--remote-debugging-port={port}",
+        f"--user-data-dir={profile_dir}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        chatgpt_url,
+    ]
+    return subprocess.Popen(
+        cmd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=CREATE_NO_WINDOW,
+    )
+
+
+def _make_upload_png(image):
+    temp_dir = os.path.join(folder_paths.get_temp_directory(), "wudd_chatgpt_uploads")
+    os.makedirs(temp_dir, exist_ok=True)
+    fd, path = tempfile.mkstemp(prefix="chatgpt_", suffix=".png", dir=temp_dir)
+    os.close(fd)
+    tensor_to_pil(image).convert("RGBA").save(path, format="PNG")
+    return path
+
+
+def _clean_response_text(text):
+    text = str(text or "").strip()
+    if not text:
+        return ""
+
+    blocked_lines = {
+        "copy",
+        "good response",
+        "bad response",
+        "read aloud",
+        "regenerate",
+        "retry",
+        "share",
+    }
+    lines = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.lower() in blocked_lines:
+            continue
+        lines.append(line.rstrip())
+    return "\n".join(lines).strip()
+
+
+async def _first_visible_locator(page, selectors, timeout_seconds):
+    deadline = time.monotonic() + max(1.0, float(timeout_seconds))
+    last_error = None
+    while time.monotonic() < deadline:
+        for selector in selectors:
+            try:
+                locator = page.locator(selector)
+                count = await locator.count()
+                for index in range(count - 1, -1, -1):
+                    candidate = locator.nth(index)
+                    if await candidate.is_visible():
+                        return candidate
+            except Exception as exc:
+                last_error = exc
+        await asyncio.sleep(0.4)
+    if last_error:
+        raise TimeoutError(f"Timed out finding ChatGPT composer: {last_error}") from last_error
+    raise TimeoutError("Timed out finding ChatGPT composer. Log in to ChatGPT in the opened browser.")
+
+
+async def _assistant_texts(page):
+    values = await page.evaluate(ASSISTANT_TEXT_SCRIPT)
+    return [_clean_response_text(value) for value in values if _clean_response_text(value)]
+
+
+def _pil_images_to_tensor_batch(images):
+    import torch
+
+    if not images:
+        return torch.zeros((1, 1, 1, 3), dtype=torch.float32)
+
+    max_width = max(image.width for image in images)
+    max_height = max(image.height for image in images)
+    tensors = []
+    for image in images:
+        canvas = Image.new("RGB", (max_width, max_height), (0, 0, 0))
+        canvas.paste(image.convert("RGB"), (0, 0))
+        arr = np.asarray(canvas).astype(np.float32) / 255.0
+        tensors.append(torch.from_numpy(arr).unsqueeze(0))
+    return torch.cat(tensors, dim=0)
+
+
+async def _visible_media_images(container, timeout_seconds):
+    timeout_ms = max(1000, int(float(timeout_seconds) * 1000))
+    images = []
+    media = container.locator("img, canvas")
+    count = await media.count()
+    for index in range(count):
+        locator = media.nth(index)
+        try:
+            if not await locator.is_visible():
+                continue
+            box = await locator.bounding_box()
+            if not box or box["width"] < 32 or box["height"] < 32:
+                continue
+            await locator.scroll_into_view_if_needed(timeout=timeout_ms)
+            raw_png = await locator.screenshot(type="png", timeout=timeout_ms)
+            pil_img = Image.open(BytesIO(raw_png))
+            pil_img.load()
+            images.append(pil_img.convert("RGB"))
+        except Exception:
+            continue
+    return images
+
+
+async def _latest_assistant_images(page, timeout_seconds):
+    containers = page.locator('[data-message-author-role="assistant"]')
+    count = await containers.count()
+    for index in range(count - 1, -1, -1):
+        images = await _visible_media_images(containers.nth(index), timeout_seconds)
+        if images:
+            return images
+
+    articles = page.locator("article")
+    count = await articles.count()
+    for index in range(count - 1, -1, -1):
+        article = articles.nth(index)
+        try:
+            label = (
+                (await article.get_attribute("aria-label")) or
+                (await article.get_attribute("data-testid")) or
+                ""
+            ).lower()
+            if "assistant" not in label and "chatgpt" not in label:
+                continue
+        except Exception:
+            continue
+
+        images = await _visible_media_images(article, timeout_seconds)
+        if images:
+            return images
+
+    return []
+
+
+async def _is_streaming(page):
+    try:
+        return bool(await page.evaluate(STREAMING_SCRIPT))
+    except Exception:
+        return False
+
+
+async def _attach_image_file(page, file_path, timeout_seconds):
+    timeout_ms = max(1000, int(float(timeout_seconds) * 1000))
+    file_inputs = page.locator('input[type="file"]')
+    try:
+        if await file_inputs.count() > 0:
+            await file_inputs.first.set_input_files(file_path, timeout=timeout_ms)
+            return
+    except Exception:
+        pass
+
+    for selector in ATTACH_BUTTON_SELECTORS:
+        button = page.locator(selector).last
+        try:
+            if await button.count() == 0 or not await button.is_visible():
+                continue
+            async with page.expect_file_chooser(timeout=timeout_ms) as file_chooser_info:
+                await button.click(timeout=timeout_ms)
+            file_chooser = await file_chooser_info.value
+            await file_chooser.set_files(file_path)
+            return
+        except Exception:
+            try:
+                if await file_inputs.count() > 0:
+                    await file_inputs.first.set_input_files(file_path, timeout=timeout_ms)
+                    return
+            except Exception:
+                pass
+
+    raise RuntimeError("Could not find ChatGPT's file upload control.")
+
+
+async def _fill_composer(composer, page, prompt):
+    await composer.click()
+    try:
+        await composer.fill("")
+    except Exception:
+        modifier = "Meta" if sys.platform == "darwin" else "Control"
+        await page.keyboard.press(f"{modifier}+A")
+        await page.keyboard.press("Backspace")
+
+    if prompt:
+        try:
+            await composer.fill(prompt)
+        except Exception:
+            await page.keyboard.insert_text(prompt)
+
+
+async def _click_send_button(page, timeout_seconds, required=True):
+    deadline = time.monotonic() + max(1.0, float(timeout_seconds))
+    while time.monotonic() < deadline:
+        for selector in SEND_BUTTON_SELECTORS:
+            try:
+                button = page.locator(selector).last
+                if await button.count() == 0:
+                    continue
+                if await button.is_visible() and await button.is_enabled():
+                    await button.click()
+                    return True
+            except Exception:
+                pass
+        await asyncio.sleep(0.25)
+    if required:
+        raise TimeoutError("Timed out finding an enabled ChatGPT send button.")
+    return False
+
+
+async def _response_started(page, previous_count):
+    texts = await _assistant_texts(page)
+    return len(texts) > previous_count or await _is_streaming(page)
+
+
+async def _wait_for_response(page, previous_count, timeout_seconds, stable_seconds):
+    deadline = time.monotonic() + max(1.0, float(timeout_seconds))
+    stable_seconds = max(0.5, float(stable_seconds))
+    last_text = ""
+    last_change = time.monotonic()
+    started = False
+
+    while time.monotonic() < deadline:
+        texts = await _assistant_texts(page)
+        current = ""
+        if len(texts) > previous_count:
+            started = True
+            current = texts[-1]
+        elif started and texts:
+            current = texts[-1]
+
+        if current and current != last_text:
+            last_text = current
+            last_change = time.monotonic()
+
+        streaming = await _is_streaming(page)
+        if last_text and started and not streaming and time.monotonic() - last_change >= stable_seconds:
+            return last_text
+
+        await asyncio.sleep(0.5)
+
+    if last_text:
+        return last_text
+    raise TimeoutError("Timed out waiting for ChatGPT response text.")
+
+
+async def _get_chatgpt_page(context, chatgpt_url, new_chat):
+    candidates = [
+        page for page in context.pages
+        if "chatgpt.com" in (page.url or "") or "chat.openai.com" in (page.url or "")
+    ]
+    page = candidates[-1] if candidates else await context.new_page()
+    await page.bring_to_front()
+    if new_chat or "chatgpt.com" not in (page.url or ""):
+        await page.goto(chatgpt_url, wait_until="domcontentloaded", timeout=60000)
+    return page
+
+
+async def _connect_browser(playwright, connection_mode, cdp_url, browser_executable,
+                           user_data_dir, chatgpt_url):
+    cdp_base, _, _ = _normalize_cdp_url(cdp_url)
+    spawned = None
+
+    if connection_mode == "connect_or_launch_chrome":
+        if not _is_cdp_ready(cdp_base):
+            spawned = _launch_browser("chrome", cdp_base, browser_executable, user_data_dir, chatgpt_url)
+            await asyncio.to_thread(_wait_for_cdp, cdp_base, 30)
+    elif connection_mode == "connect_or_launch_edge":
+        if not _is_cdp_ready(cdp_base):
+            spawned = _launch_browser("edge", cdp_base, browser_executable, user_data_dir, chatgpt_url)
+            await asyncio.to_thread(_wait_for_cdp, cdp_base, 30)
+    elif connection_mode == "launch_chrome":
+        spawned = _launch_browser("chrome", cdp_base, browser_executable, user_data_dir, chatgpt_url)
+        await asyncio.to_thread(_wait_for_cdp, cdp_base, 30)
+    elif connection_mode == "launch_edge":
+        spawned = _launch_browser("edge", cdp_base, browser_executable, user_data_dir, chatgpt_url)
+        await asyncio.to_thread(_wait_for_cdp, cdp_base, 30)
+
+    browser = await playwright.chromium.connect_over_cdp(cdp_base)
+    context = browser.contexts[0] if browser.contexts else await browser.new_context()
+    return browser, context, spawned
+
+
+class WuddChatGPTBrowser:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "prompt": ("STRING", {"default": "", "multiline": True}),
+                "connection_mode": (BROWSER_CONNECTION_MODES, {"default": "connect_or_launch_edge"}),
+                "chatgpt_url": ("STRING", {"default": DEFAULT_CHATGPT_URL, "advanced": True}),
+                "cdp_url": ("STRING", {"default": DEFAULT_CDP_URL, "advanced": True}),
+                "wait_timeout_seconds": (
+                    "INT",
+                    {"default": 300, "min": 10, "max": 3600, "step": 1, "advanced": True},
+                ),
+                "stable_seconds": (
+                    "FLOAT",
+                    {"default": 2.0, "min": 0.5, "max": 30.0, "step": 0.5, "advanced": True},
+                ),
+                "upload_wait_seconds": (
+                    "FLOAT",
+                    {"default": 4.0, "min": 0.0, "max": 120.0, "step": 0.5, "advanced": True},
+                ),
+                "new_chat": ("BOOLEAN", {"default": True}),
+                "submit_action": (SUBMIT_ACTIONS, {"default": "press_enter"}),
+                "keep_browser_open": ("BOOLEAN", {"default": True, "advanced": True}),
+                "run_id": (
+                    "INT",
+                    {
+                        "default": 0,
+                        "min": 0,
+                        "max": 2147483647,
+                        "step": 1,
+                        "control_after_generate": True,
+                    },
+                ),
+            },
+            "optional": {
+                "image": ("IMAGE",),
+                "browser_executable": ("STRING", {"default": "", "advanced": True}),
+                "user_data_dir": ("STRING", {"default": "", "advanced": True}),
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "STRING", "IMAGE", "INT")
+    RETURN_NAMES = ("text", "conversation_url", "images", "image_count")
+    FUNCTION = "submit"
+    CATEGORY = BROWSER_CATEGORY
+
+    @classmethod
+    def IS_CHANGED(cls, *args, **kwargs):
+        return _stable_hash(cls.__name__, args, kwargs)
+
+    async def submit(
+        self,
+        prompt,
+        connection_mode,
+        chatgpt_url,
+        cdp_url,
+        wait_timeout_seconds,
+        stable_seconds,
+        upload_wait_seconds,
+        new_chat,
+        submit_action,
+        keep_browser_open,
+        run_id,
+        image=None,
+        browser_executable="",
+        user_data_dir="",
+    ):
+        prompt = str(prompt or "")
+        if not prompt.strip() and image is None:
+            raise ValueError("Prompt or image is required.")
+        if connection_mode not in BROWSER_CONNECTION_MODES:
+            raise ValueError(f"Unsupported connection_mode: {connection_mode}")
+        if submit_action not in SUBMIT_ACTIONS:
+            raise ValueError(f"Unsupported submit_action: {submit_action}")
+
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError as exc:
+            raise ImportError(
+                "Wudd ChatGPT Browser requires Playwright. Install it in the ComfyUI "
+                "Python environment with: python -m pip install playwright"
+            ) from exc
+
+        chatgpt_url = _normalize_url(chatgpt_url, DEFAULT_CHATGPT_URL)
+        cdp_base, _, _ = _normalize_cdp_url(cdp_url)
+        upload_path = None
+        spawned = None
+        browser = None
+        playwright = await async_playwright().start()
+
+        try:
+            browser, context, spawned = await _connect_browser(
+                playwright,
+                connection_mode,
+                cdp_base,
+                browser_executable,
+                user_data_dir,
+                chatgpt_url,
+            )
+            page = await _get_chatgpt_page(context, chatgpt_url, bool(new_chat))
+            composer = await _first_visible_locator(page, COMPOSER_SELECTORS, wait_timeout_seconds)
+            previous_count = len(await _assistant_texts(page))
+
+            if image is not None:
+                upload_path = _make_upload_png(image)
+                await _attach_image_file(page, upload_path, wait_timeout_seconds)
+                if float(upload_wait_seconds) > 0:
+                    await asyncio.sleep(float(upload_wait_seconds))
+
+            await _fill_composer(composer, page, prompt)
+
+            if submit_action == "click_send_button":
+                await _click_send_button(page, wait_timeout_seconds)
+            else:
+                await composer.press("Enter")
+                await asyncio.sleep(2.0)
+                if not await _response_started(page, previous_count):
+                    await _click_send_button(page, 5, required=False)
+
+            text = await _wait_for_response(
+                page,
+                previous_count,
+                wait_timeout_seconds,
+                stable_seconds,
+            )
+            images = await _latest_assistant_images(page, wait_timeout_seconds)
+            return (text, page.url, _pil_images_to_tensor_batch(images), len(images))
+        finally:
+            if upload_path and os.path.exists(upload_path):
+                try:
+                    os.remove(upload_path)
+                except OSError:
+                    pass
+
+            if spawned is not None and not bool(keep_browser_open):
+                if browser is not None:
+                    try:
+                        await browser.close()
+                    except Exception:
+                        pass
+                if spawned.poll() is None:
+                    spawned.terminate()
+            await playwright.stop()
+
+
+__all__ = ["WuddChatGPTBrowser"]
