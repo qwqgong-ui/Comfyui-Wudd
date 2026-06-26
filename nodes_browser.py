@@ -177,6 +177,71 @@ STOP_RESPONSE_SCRIPT = """
 }
 """
 
+COMPOSER_STATE_SCRIPT = """
+(el) => {
+  if (!el) return { ready: false, text: "" };
+  const style = window.getComputedStyle(el);
+  const rect = el.getBoundingClientRect();
+  const tag = (el.tagName || "").toLowerCase();
+  const ariaDisabled = (el.getAttribute("aria-disabled") || "").toLowerCase() === "true";
+  const editable = tag === "textarea" || tag === "input" || el.isContentEditable;
+  const disabled = Boolean(el.disabled || el.readOnly || ariaDisabled);
+  const visible = style.display !== "none" &&
+    style.visibility !== "hidden" &&
+    rect.width > 0 &&
+    rect.height > 0;
+  const form = el.closest("form");
+  const busy = Boolean(
+    (form && (form.getAttribute("aria-busy") || "").toLowerCase() === "true") ||
+    (form && form.querySelector('[aria-busy="true"]'))
+  );
+  const text = tag === "textarea" || tag === "input"
+    ? (el.value || "")
+    : (el.innerText || el.textContent || "");
+  return { ready: Boolean(visible && editable && !disabled && !busy), text };
+}
+"""
+
+SET_COMPOSER_TEXT_SCRIPT = """
+(el, text) => {
+  if (!el) return "";
+  const tag = (el.tagName || "").toLowerCase();
+  el.focus();
+
+  if (tag === "textarea" || tag === "input") {
+    const proto = tag === "textarea" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
+    if (descriptor && descriptor.set) {
+      descriptor.set.call(el, text);
+    } else {
+      el.value = text;
+    }
+  } else {
+    el.textContent = text;
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(false);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
+  try {
+    el.dispatchEvent(new InputEvent("input", {
+      bubbles: true,
+      inputType: "insertText",
+      data: text
+    }));
+  } catch (_) {
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+  return tag === "textarea" || tag === "input"
+    ? (el.value || "")
+    : (el.innerText || el.textContent || "");
+}
+"""
+
 MEDIA_TO_DATA_URL_SCRIPT = """
 async (el) => {
   const tag = (el.tagName || "").toLowerCase();
@@ -681,7 +746,8 @@ def _launch_browser(
         f"--user-data-dir={profile_dir}",
         "--no-first-run",
         "--no-default-browser-check",
-        chatgpt_url,
+        "--start-minimized",
+        "about:blank",
     ]
     if resolved_profile_directory:
         cmd.insert(-1, f"--profile-directory={resolved_profile_directory}")
@@ -811,6 +877,15 @@ def _merge_batch_results(results):
         merged_images = torch.cat(padded, dim=0)
 
     return ("\n\n".join(texts), "\n".join(urls), merged_images, total_count)
+
+
+def _empty_batch_result(text="", url=""):
+    return (str(text or ""), str(url or ""), _pil_images_to_tensor_batch([]), 0)
+
+
+def _is_interrupt_exception(exc):
+    interrupt_cls = getattr(comfy_model_management, "InterruptProcessingException", None)
+    return interrupt_cls is not None and isinstance(exc, interrupt_cls)
 
 
 def _looks_like_chatgpt_image_url(url):
@@ -1323,6 +1398,40 @@ async def _try_stop_response(page):
         pass
 
 
+def _normalize_composer_text(text):
+    return str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+async def _composer_state(composer):
+    try:
+        state = await _await_interruptible(composer.evaluate(COMPOSER_STATE_SCRIPT))
+    except Exception:
+        return {"ready": False, "text": ""}
+    if not isinstance(state, dict):
+        return {"ready": False, "text": ""}
+    return state
+
+
+async def _wait_for_composer_ready(composer, timeout_seconds):
+    deadline = time.monotonic() + max(5.0, min(60.0, float(timeout_seconds)))
+    ready_since = None
+    last_state = {"ready": False, "text": ""}
+
+    while time.monotonic() < deadline:
+        _check_interrupted()
+        last_state = await _composer_state(composer)
+        if bool(last_state.get("ready")):
+            if ready_since is None:
+                ready_since = time.monotonic()
+            elif time.monotonic() - ready_since >= 0.5:
+                return last_state
+        else:
+            ready_since = None
+        await _sleep_interruptible(0.2)
+
+    raise TimeoutError(f"ChatGPT composer did not become ready: {last_state}")
+
+
 async def _attach_image_file(page, file_path, timeout_seconds):
     timeout_ms = max(1000, int(float(timeout_seconds) * 1000))
     file_inputs = page.locator('input[type="file"]')
@@ -1361,20 +1470,36 @@ async def _attach_image_file(page, file_path, timeout_seconds):
     raise RuntimeError("Could not find ChatGPT's file upload control.")
 
 
-async def _fill_composer(composer, page, prompt):
-    await _await_interruptible(composer.click())
-    try:
-        await _await_interruptible(composer.fill(""))
-    except Exception:
-        modifier = "Meta" if sys.platform == "darwin" else "Control"
-        await _await_interruptible(page.keyboard.press(f"{modifier}+A"))
-        await _await_interruptible(page.keyboard.press("Backspace"))
+async def _fill_composer(composer, page, prompt, timeout_seconds):
+    prompt = str(prompt or "")
+    expected = _normalize_composer_text(prompt)
+    last_text = ""
 
-    if prompt:
+    for _ in range(3):
+        await _wait_for_composer_ready(composer, timeout_seconds)
+        await _await_interruptible(composer.click())
         try:
-            await _await_interruptible(composer.fill(prompt))
+            actual = await _await_interruptible(
+                composer.evaluate(SET_COMPOSER_TEXT_SCRIPT, prompt),
+            )
         except Exception:
-            await _await_interruptible(page.keyboard.insert_text(prompt))
+            modifier = "Meta" if sys.platform == "darwin" else "Control"
+            await _await_interruptible(page.keyboard.press(f"{modifier}+A"))
+            await _await_interruptible(page.keyboard.press("Backspace"))
+            if prompt:
+                await _await_interruptible(page.keyboard.insert_text(prompt))
+            actual = None
+
+        await _sleep_interruptible(0.2)
+        state = await _composer_state(composer)
+        last_text = _normalize_composer_text(state.get("text") if state else actual)
+        if last_text == expected:
+            return
+
+    raise RuntimeError(
+        "ChatGPT composer text verification failed before submit. "
+        f"Expected {len(expected)} chars, got {len(last_text)} chars."
+    )
 
 
 async def _click_send_button(page, timeout_seconds, required=True):
@@ -1517,6 +1642,10 @@ def _is_reusable_unnamed_chatgpt_page(url, chatgpt_url):
     return path in ("", "/")
 
 
+def _is_reusable_blank_page(url):
+    return str(url or "").strip().lower() in ("", "about:blank")
+
+
 def _page_is_closed(page):
     try:
         return page.is_closed()
@@ -1540,7 +1669,7 @@ def _claim_reusable_chatgpt_page(session, chatgpt_url):
     for page in reversed(list(session.context.pages)):
         if _page_is_closed(page) or id(page) in pooled_ids:
             continue
-        if _is_reusable_unnamed_chatgpt_page(page.url, chatgpt_url):
+        if _is_reusable_blank_page(page.url) or _is_reusable_unnamed_chatgpt_page(page.url, chatgpt_url):
             session.page_pool.append(page)
             return page
     return None
@@ -1817,9 +1946,9 @@ class WuddChatGPTBrowser:
         if len(image_batch) > 1:
             semaphore = asyncio.Semaphore(parallel_pages)
 
-            async def run_single(single_image):
+            async def run_single(batch_index, single_image):
                 async with semaphore:
-                    return await self.submit(
+                    result = await self.submit(
                         prompt,
                         connection_mode,
                         chatgpt_url,
@@ -1838,22 +1967,49 @@ class WuddChatGPTBrowser:
                         user_data_dir=user_data_dir,
                         profile_directory=profile_directory,
                     )
+                    return batch_index, result
 
             tasks = [
-                asyncio.create_task(run_single(single_image))
-                for single_image in image_batch
+                asyncio.create_task(run_single(index, single_image))
+                for index, single_image in enumerate(image_batch)
             ]
+            pending = set(tasks)
+            results = [None] * len(image_batch)
+            errors = {}
             try:
-                results = await asyncio.gather(*tasks)
+                while pending:
+                    _check_interrupted()
+                    done, pending = await asyncio.wait(
+                        pending,
+                        timeout=0.5,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for task in done:
+                        try:
+                            index, result = task.result()
+                            results[index] = result
+                        except Exception as exc:
+                            if _is_interrupt_exception(exc):
+                                raise
+                            errors[tasks.index(task)] = exc
             except BaseException:
                 for task in tasks:
-                    task.cancel()
+                    if not task.done():
+                        task.cancel()
                 done, pending = await asyncio.wait(tasks, timeout=5.0)
                 for task in done:
                     _consume_task_exception(task)
                 for task in pending:
                     task.add_done_callback(_consume_task_exception)
                 raise
+
+            for index, exc in errors.items():
+                results[index] = _empty_batch_result(f"[error] item {index + 1}: {exc}")
+
+            successful = sum(1 for index, result in enumerate(results) if result is not None and index not in errors)
+            if successful == 0:
+                details = "; ".join(f"item {index + 1}: {exc}" for index, exc in sorted(errors.items()))
+                raise RuntimeError(f"All ChatGPT browser batch tasks failed: {details}")
             return _merge_batch_results(results)
 
         try:
@@ -1908,7 +2064,7 @@ class WuddChatGPTBrowser:
                 ignored_fingerprints=ignored_image_fingerprints,
             )
             image_collector.start()
-            await _fill_composer(composer, page, prompt)
+            await _fill_composer(composer, page, prompt, wait_timeout_seconds)
 
             if submit_action == "click_send_button":
                 await _click_send_button(page, wait_timeout_seconds)
@@ -1916,7 +2072,7 @@ class WuddChatGPTBrowser:
                 await _await_interruptible(composer.press("Enter"))
                 await _sleep_interruptible(2.0)
                 if not await _response_started(page, previous_count):
-                    await _click_send_button(page, 5, required=False)
+                    await _click_send_button(page, min(30.0, float(wait_timeout_seconds)), required=True)
 
             text, images = await _wait_for_response_result(
                 page,
