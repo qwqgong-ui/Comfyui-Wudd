@@ -45,6 +45,7 @@ BROWSER_PROFILE_MODES = [
     "browser_default_profile",
     "custom_user_data_dir",
 ]
+_BROWSER_EXECUTION_LOCKS = {}
 
 COMPOSER_SELECTORS = [
     '#prompt-textarea[contenteditable="true"]',
@@ -328,6 +329,16 @@ def _stable_hash(*args, **kwargs):
     return hasher.hexdigest()
 
 
+def _browser_execution_lock():
+    loop = asyncio.get_running_loop()
+    key = id(loop)
+    lock = _BROWSER_EXECUTION_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _BROWSER_EXECUTION_LOCKS[key] = lock
+    return lock
+
+
 def _normalize_url(url, default):
     url = str(url or "").strip() or default
     if not url.startswith(("http://", "https://")):
@@ -350,6 +361,14 @@ def _normalize_cdp_url(cdp_url):
 def _cdp_version_url(cdp_url):
     base, _, _ = _normalize_cdp_url(cdp_url)
     return base.rstrip("/") + "/json/version"
+
+
+def _is_chatgpt_page_url(url):
+    try:
+        host = urlparse(str(url or "")).hostname or ""
+    except Exception:
+        return False
+    return host == "chatgpt.com" or host.endswith(".chatgpt.com") or host == "chat.openai.com"
 
 
 def _is_cdp_ready(cdp_url):
@@ -605,6 +624,50 @@ def _pil_images_to_tensor_batch(images):
         arr = np.asarray(canvas).astype(np.float32) / 255.0
         tensors.append(torch.from_numpy(arr).unsqueeze(0))
     return torch.cat(tensors, dim=0)
+
+
+def _split_image_batch(image):
+    if image is None:
+        return [None]
+    shape = getattr(image, "shape", None)
+    if shape is None or len(shape) != 4 or int(shape[0]) <= 1:
+        return [image]
+    return [image[index:index + 1] for index in range(int(shape[0]))]
+
+
+def _merge_batch_results(results):
+    import torch
+
+    texts = []
+    urls = []
+    image_batches = []
+    total_count = 0
+
+    for index, result in enumerate(results, start=1):
+        text, url, images, image_count = result
+        if text:
+            texts.append(f"[{index}] {text}")
+        if url:
+            urls.append(str(url))
+        count = int(image_count or 0)
+        if count > 0:
+            image_batches.append(images[:count])
+            total_count += count
+
+    if not image_batches:
+        merged_images = torch.zeros((1, 1, 1, 3), dtype=torch.float32)
+    else:
+        max_height = max(int(batch.shape[1]) for batch in image_batches)
+        max_width = max(int(batch.shape[2]) for batch in image_batches)
+        padded = []
+        for batch in image_batches:
+            for image in batch:
+                canvas = torch.zeros((max_height, max_width, image.shape[-1]), dtype=image.dtype)
+                canvas[: image.shape[0], : image.shape[1], : image.shape[2]] = image
+                padded.append(canvas.unsqueeze(0))
+        merged_images = torch.cat(padded, dim=0)
+
+    return ("\n\n".join(texts), "\n".join(urls), merged_images, total_count)
 
 
 def _looks_like_chatgpt_image_url(url):
@@ -1219,15 +1282,37 @@ async def _wait_for_response_result(page, collector, previous_count, timeout_sec
     raise TimeoutError("Timed out waiting for ChatGPT response text or image.")
 
 
+async def _goto_chatgpt(page, chatgpt_url):
+    last_error = None
+    for wait_until in ("domcontentloaded", "commit"):
+        try:
+            await page.goto(chatgpt_url, wait_until=wait_until, timeout=60000)
+            return
+        except Exception as exc:
+            last_error = exc
+            message = str(exc)
+            if "ERR_ABORTED" in message and _is_chatgpt_page_url(page.url):
+                return
+            await asyncio.sleep(0.75)
+    if last_error is not None:
+        raise last_error
+
+
 async def _get_chatgpt_page(context, chatgpt_url, new_chat):
+    if new_chat:
+        page = await context.new_page()
+        await _goto_chatgpt(page, chatgpt_url)
+        await page.bring_to_front()
+        return page
+
     candidates = [
         page for page in context.pages
-        if "chatgpt.com" in (page.url or "") or "chat.openai.com" in (page.url or "")
+        if _is_chatgpt_page_url(page.url)
     ]
     page = candidates[-1] if candidates else await context.new_page()
     await page.bring_to_front()
-    if new_chat or "chatgpt.com" not in (page.url or ""):
-        await page.goto(chatgpt_url, wait_until="domcontentloaded", timeout=60000)
+    if not _is_chatgpt_page_url(page.url):
+        await _goto_chatgpt(page, chatgpt_url)
     return page
 
 
@@ -1378,6 +1463,30 @@ class WuddChatGPTBrowser:
         if profile_mode not in BROWSER_PROFILE_MODES:
             raise ValueError(f"Unsupported profile_mode: {profile_mode}")
 
+        image_batch = _split_image_batch(image)
+        if len(image_batch) > 1:
+            results = []
+            for single_image in image_batch:
+                results.append(await self.submit(
+                    prompt,
+                    connection_mode,
+                    chatgpt_url,
+                    cdp_url,
+                    wait_timeout_seconds,
+                    stable_seconds,
+                    upload_wait_seconds,
+                    new_chat,
+                    submit_action,
+                    keep_browser_open,
+                    profile_mode,
+                    run_id,
+                    image=single_image,
+                    browser_executable=browser_executable,
+                    user_data_dir=user_data_dir,
+                    profile_directory=profile_directory,
+                ))
+            return _merge_batch_results(results)
+
         try:
             from playwright.async_api import async_playwright
         except ImportError as exc:
@@ -1392,7 +1501,13 @@ class WuddChatGPTBrowser:
         spawned = None
         browser = None
         image_collector = None
-        playwright = await async_playwright().start()
+        browser_lock = _browser_execution_lock()
+        await browser_lock.acquire()
+        try:
+            playwright = await async_playwright().start()
+        except Exception:
+            browser_lock.release()
+            raise
 
         try:
             browser, context, spawned = await _connect_browser(
@@ -1461,7 +1576,10 @@ class WuddChatGPTBrowser:
                         pass
                 if spawned.poll() is None:
                     spawned.terminate()
-            await playwright.stop()
+            try:
+                await playwright.stop()
+            finally:
+                browser_lock.release()
 
 
 __all__ = ["WuddChatGPTBrowser"]
