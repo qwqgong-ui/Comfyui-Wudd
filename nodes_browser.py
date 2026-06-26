@@ -185,7 +185,7 @@ async (el) => {
 
   if (src) {
     try {
-      const response = await fetch(src);
+      const response = await fetch(src, { credentials: "include" });
       if (response.ok) {
         return await blobToDataURL(await response.blob());
       }
@@ -194,6 +194,83 @@ async (el) => {
 
   const canvas = canvasFromImage(el);
   return canvas ? canvas.toDataURL("image/png") : null;
+}
+"""
+
+URL_TO_DATA_URL_SCRIPT = """
+async (url) => {
+  function blobToDataURL(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  const response = await fetch(url, { credentials: "include" });
+  if (!response.ok) return null;
+  return await blobToDataURL(await response.blob());
+}
+"""
+
+GENERATED_IMAGE_URLS_SCRIPT = """
+() => {
+  const needles = [
+    "/backend-api/estuary/content",
+    "/backend-api/files",
+    "/backend-api/file",
+    "files.oaiusercontent.com",
+    "oaiusercontent.com",
+    "oaidalle",
+    "dalle"
+  ];
+  const urls = [];
+  const seen = new Set();
+
+  function add(url) {
+    if (!url || url.startsWith("data:") || url.startsWith("blob:")) return;
+    try {
+      url = new URL(url, document.baseURI).href;
+    } catch (_) {
+      return;
+    }
+    const value = url.toLowerCase();
+    if (!needles.some((needle) => value.includes(needle))) return;
+    if (seen.has(url)) return;
+    seen.add(url);
+    urls.push(url);
+  }
+
+  function addSrcset(srcset) {
+    if (!srcset) return;
+    for (const part of srcset.split(",")) {
+      add(part.trim().split(/\\s+/)[0]);
+    }
+  }
+
+  for (const img of document.querySelectorAll("img")) {
+    add(img.currentSrc || img.src);
+    addSrcset(img.getAttribute("srcset"));
+  }
+
+  for (const source of document.querySelectorAll("source")) {
+    add(source.src);
+    addSrcset(source.getAttribute("srcset"));
+  }
+
+  for (const link of document.querySelectorAll("a")) {
+    add(link.href);
+  }
+
+  for (const el of document.querySelectorAll("[style]")) {
+    const bg = getComputedStyle(el).backgroundImage || "";
+    for (const match of bg.matchAll(/url\\(["']?([^"')]+)["']?\\)/g)) {
+      add(match[1]);
+    }
+  }
+
+  return urls;
 }
 """
 
@@ -507,6 +584,52 @@ def _pil_images_to_tensor_batch(images):
     return torch.cat(tensors, dim=0)
 
 
+def _looks_like_chatgpt_image_url(url):
+    value = str(url or "").lower()
+    return any(
+        marker in value
+        for marker in (
+            "/backend-api/estuary/content",
+            "/backend-api/files",
+            "/backend-api/file",
+            "files.oaiusercontent.com",
+            "oaiusercontent.com",
+            "oaidalle",
+            "dalle",
+        )
+    )
+
+
+def _is_candidate_generated_image(image, strong_match=False):
+    if image is None:
+        return False
+    min_edge = 64 if strong_match else 128
+    min_area = 4096 if strong_match else 65536
+    return image.width >= min_edge and image.height >= min_edge and image.width * image.height >= min_area
+
+
+def _image_fingerprint(image):
+    rgb = image.convert("RGB")
+    hasher = hashlib.sha256()
+    hasher.update(f"{rgb.width}x{rgb.height}".encode("ascii"))
+    hasher.update(rgb.tobytes())
+    return hasher.hexdigest()
+
+
+def _dedupe_images(images):
+    deduped = []
+    seen = set()
+    for image in images:
+        if image is None:
+            continue
+        key = _image_fingerprint(image)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(image)
+    return deduped
+
+
 def _pil_from_data_url(data_url):
     if not data_url or "," not in data_url:
         return None
@@ -517,6 +640,81 @@ def _pil_from_data_url(data_url):
     image = Image.open(BytesIO(raw))
     image.load()
     return image.convert("RGB")
+
+
+def _pil_from_response_bytes(raw):
+    image = Image.open(BytesIO(raw))
+    image.load()
+    return image.convert("RGB")
+
+
+class _ImageResponseCollector:
+    def __init__(self, page):
+        self.page = page
+        self.images = []
+        self._raw_hashes = set()
+        self._tasks = set()
+        self._started = False
+
+    def start(self):
+        if self._started:
+            return
+        self.page.on("response", self._on_response)
+        self._started = True
+
+    def stop(self):
+        if not self._started:
+            return
+        try:
+            self.page.remove_listener("response", self._on_response)
+        except Exception:
+            pass
+        self._started = False
+
+    def _on_response(self, response):
+        task = asyncio.create_task(self._capture_response(response))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _capture_response(self, response):
+        try:
+            url = response.url
+            headers = response.headers or {}
+            content_type = str(headers.get("content-type") or "").lower()
+            strong_match = _looks_like_chatgpt_image_url(url)
+            if not strong_match and not content_type.startswith("image/"):
+                return
+            if content_type.startswith("image/svg"):
+                return
+
+            raw = await response.body()
+            if not raw:
+                return
+            raw_hash = hashlib.sha256(raw).hexdigest()
+            if raw_hash in self._raw_hashes:
+                return
+
+            image = _pil_from_response_bytes(raw)
+            if not _is_candidate_generated_image(image, strong_match=strong_match):
+                return
+
+            self._raw_hashes.add(raw_hash)
+            self.images.append(image)
+        except Exception:
+            return
+
+    async def drain(self, timeout_seconds=2.0):
+        if self._tasks:
+            done, pending = await asyncio.wait(
+                list(self._tasks),
+                timeout=max(0.1, float(timeout_seconds)),
+            )
+            for task in done:
+                try:
+                    task.result()
+                except Exception:
+                    pass
+        return list(self.images)
 
 
 async def _media_locator_to_pil(locator, timeout_ms):
@@ -534,10 +732,43 @@ async def _media_locator_to_pil(locator, timeout_ms):
     return image.convert("RGB")
 
 
-async def _visible_media_images(container, timeout_seconds):
+async def _url_to_pil_via_page(page, url, timeout_seconds):
+    try:
+        data_url = await asyncio.wait_for(
+            page.evaluate(URL_TO_DATA_URL_SCRIPT, url),
+            timeout=max(1.0, float(timeout_seconds)),
+        )
+        return _pil_from_data_url(data_url)
+    except Exception:
+        return None
+
+
+async def _generated_url_images(page, timeout_seconds):
+    try:
+        urls = await page.evaluate(GENERATED_IMAGE_URLS_SCRIPT)
+    except Exception:
+        return []
+
+    images = []
+    seen_urls = set()
+    per_url_timeout = min(10.0, max(1.0, float(timeout_seconds)))
+    for url in reversed(urls or []):
+        if url in seen_urls:
+            continue
+        seen_urls.add(url)
+        image = await _url_to_pil_via_page(page, url, per_url_timeout)
+        if not _is_candidate_generated_image(image, strong_match=True):
+            continue
+        images.append(image)
+        if len(images) >= 4:
+            break
+    return list(reversed(_dedupe_images(images)))
+
+
+async def _visible_media_images(container, timeout_seconds, selector="img, canvas", min_size=32):
     timeout_ms = max(1000, int(float(timeout_seconds) * 1000))
     images = []
-    media = container.locator("img, canvas")
+    media = container.locator(selector)
     count = await media.count()
     for index in range(count):
         locator = media.nth(index)
@@ -545,13 +776,29 @@ async def _visible_media_images(container, timeout_seconds):
             if not await locator.is_visible():
                 continue
             box = await locator.bounding_box()
-            if not box or box["width"] < 32 or box["height"] < 32:
+            if not box or box["width"] < min_size or box["height"] < min_size:
                 continue
             await locator.scroll_into_view_if_needed(timeout=timeout_ms)
             images.append(await _media_locator_to_pil(locator, timeout_ms))
         except Exception:
             continue
     return images
+
+
+async def _visible_generated_media_images(page, timeout_seconds):
+    selector = (
+        'img[src*="/backend-api/estuary/content"], '
+        'img[src*="/backend-api/files"], '
+        'img[src*="/backend-api/file"], '
+        'img[src*="files.oaiusercontent.com"], '
+        'img[src*="oaiusercontent.com"], '
+        'img[src*="oaidalle"], '
+        'img[src*="dalle"]'
+    )
+    images = await _visible_media_images(page, timeout_seconds, selector=selector, min_size=64)
+    return _dedupe_images(
+        image for image in images if _is_candidate_generated_image(image, strong_match=True)
+    )
 
 
 async def _latest_assistant_images(page, timeout_seconds):
@@ -581,6 +828,47 @@ async def _latest_assistant_images(page, timeout_seconds):
         if images:
             return images
 
+    images = await _generated_url_images(page, timeout_seconds)
+    if images:
+        return images
+
+    images = await _visible_generated_media_images(page, timeout_seconds)
+    if images:
+        return images
+
+    return []
+
+
+async def _wait_for_response_images(page, collector, timeout_seconds):
+    max_wait = min(30.0, max(5.0, float(timeout_seconds) * 0.1))
+    deadline = time.monotonic() + max_wait
+    not_streaming_since = None
+
+    while True:
+        images = []
+        if collector is not None:
+            images.extend(await collector.drain(0.25))
+        images.extend(await _latest_assistant_images(page, min(5.0, float(timeout_seconds))))
+        images = _dedupe_images(images)
+        if images:
+            return images
+
+        now = time.monotonic()
+        if now >= deadline:
+            break
+
+        if await _is_streaming(page):
+            not_streaming_since = None
+        else:
+            if not_streaming_since is None:
+                not_streaming_since = now
+            elif now - not_streaming_since >= 5.0:
+                break
+
+        await asyncio.sleep(0.75)
+
+    if collector is not None:
+        return _dedupe_images(await collector.drain(2.0))
     return []
 
 
@@ -865,6 +1153,7 @@ class WuddChatGPTBrowser:
         upload_path = None
         spawned = None
         browser = None
+        image_collector = None
         playwright = await async_playwright().start()
 
         try:
@@ -888,6 +1177,8 @@ class WuddChatGPTBrowser:
                 if float(upload_wait_seconds) > 0:
                     await asyncio.sleep(float(upload_wait_seconds))
 
+            image_collector = _ImageResponseCollector(page)
+            image_collector.start()
             await _fill_composer(composer, page, prompt)
 
             if submit_action == "click_send_button":
@@ -904,9 +1195,12 @@ class WuddChatGPTBrowser:
                 wait_timeout_seconds,
                 stable_seconds,
             )
-            images = await _latest_assistant_images(page, wait_timeout_seconds)
+            images = await _wait_for_response_images(page, image_collector, wait_timeout_seconds)
             return (text, page.url, _pil_images_to_tensor_batch(images), len(images))
         finally:
+            if image_collector is not None:
+                image_collector.stop()
+
             if upload_path and os.path.exists(upload_path):
                 try:
                     os.remove(upload_path)
