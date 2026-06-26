@@ -629,5 +629,68 @@
       "2": { "name": "图片" },
       "3": { "name": "图片数量" }
     }
+  },
+  "WuddV3MultiSaveImage": {
+    "display_name": "Wudd V3 批量保存图像"
+  },
+  "WuddV3SaveVideo": {
+    "display_name": "Wudd V3 保存视频"
+  },
+  "WuddV3FastForwardVideo": {
+    "display_name": "Wudd V3 视频快进"
+  },
+  "WuddV3ConcatVideos": {
+    "display_name": "Wudd V3 拼接视频"
+  },
+  "WuddV3TextSplitter": {
+    "display_name": "Wudd V3 文本分行"
+  },
+  "WuddV3MultiTextSplitter": {
+    "display_name": "Wudd V3 多路文本分行"
+  },
+  "WuddV3PromptListFromText": {
+    "display_name": "Wudd V3 提示词列表"
+  },
+  "WuddV3DropAlpha": {
+    "display_name": "Wudd V3 去除 Alpha"
+  },
+  "WuddV3ImageExpand": {
+    "display_name": "Wudd V3 图像扩展"
+  },
+  "WuddV3EdgePad": {
+    "display_name": "Wudd V3 边缘补图"
+  },
+  "WuddV3ImageListImporter": {
+    "display_name": "Wudd V3 图片列表导入"
+  },
+  "WuddV3ImageStitch": {
+    "display_name": "Wudd V3 图像拼接"
+  },
+  "WuddV3PathJoiner": {
+    "display_name": "Wudd V3 路径拼接"
+  },
+  "WuddV3GroupSwitch": {
+    "display_name": "Wudd V3 组开关"
+  },
+  "WuddV3VideoAudioExtractor": {
+    "display_name": "Wudd V3 从视频提取音频"
+  },
+  "WuddV3ReplaceVideoAudio": {
+    "display_name": "Wudd V3 替换视频音频"
+  },
+  "WuddV3OpenRouterGPTText": {
+    "display_name": "Wudd V3 OpenRouter GPT 文本"
+  },
+  "WuddV3OpenRouterClaudeText": {
+    "display_name": "Wudd V3 OpenRouter Claude 文本"
+  },
+  "WuddV3OpenRouterGeminiText": {
+    "display_name": "Wudd V3 OpenRouter Gemini 文本"
+  },
+  "WuddV3OpenRouterGPTImage": {
+    "display_name": "Wudd V3 OpenRouter GPT 图像"
+  },
+  "WuddV3OpenRouterGeminiImage": {
+    "display_name": "Wudd V3 OpenRouter Gemini 图像"
   }
 }
