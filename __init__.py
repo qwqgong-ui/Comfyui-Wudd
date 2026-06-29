@@ -1,19 +1,13 @@
-"""
-ComfyUI-Wudd-V3 - V3 node package entrypoint.
+"""ComfyUI-Wudd-V3 package entrypoint."""
 
-This package intentionally uses unique WuddV3* node ids and only imports
-implementation modules from this directory.
-"""
-
-from .v3_adapter import WUDD_V3_NODE_CLASSES, comfy_entrypoint
+from .nodes import (
+    NODE_CLASS_MAPPINGS,
+    NODE_DISPLAY_NAME_MAPPINGS,
+    WUDD_V3_NODE_CLASSES,
+    comfy_entrypoint,
+)
 
 WEB_DIRECTORY = "./web"
-
-NODE_CLASS_MAPPINGS = WUDD_V3_NODE_CLASSES
-NODE_DISPLAY_NAME_MAPPINGS = {
-    node_id: node_cls.GET_SCHEMA().display_name or node_id
-    for node_id, node_cls in WUDD_V3_NODE_CLASSES.items()
-}
 
 __all__ = [
     "WEB_DIRECTORY",

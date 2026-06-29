@@ -2,7 +2,7 @@
 Group control helper nodes.
 """
 
-from .nodes_common import WUDD_CATEGORY
+from .common import WUDD_CATEGORY
 
 
 class WuddGroupSwitch:

@@ -5,3 +5,5 @@ __pycache__/
 bin/*
 !bin/
 !bin/.gitkeep
+!bin/jxl-x64-windows-static/
+!bin/jxl-x64-windows-static/**

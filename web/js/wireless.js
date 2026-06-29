@@ -1,4 +1,4 @@
-import { app } from "../../scripts/app.js";
+import { app } from "../../../scripts/app.js";
 
 const CATEGORY = "Wudd Nodes V3/Wireless";
 const SENDER_NODE_TYPE = "WuddV3WirelessInput";

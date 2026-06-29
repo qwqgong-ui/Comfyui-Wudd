@@ -1,4 +1,4 @@
-import { app } from "../../scripts/app.js";
+import { app } from "../../../scripts/app.js";
 
 const MODE_ALWAYS = 0;
 const MODE_NEVER = 2;

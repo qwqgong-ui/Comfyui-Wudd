@@ -1,7 +1,7 @@
 # ComfyUI-Wudd 节点逻辑手册
 
 > 本文档清晰记录 ComfyUI-Wudd 套件中每个自定义节点的内部逻辑，便于后续维护、代码审阅与 AI 协作。
-> 代码按功能域拆分到 `nodes_image.py` / `nodes_text.py` / `nodes_api.py` 三个文件，共享工具在 `nodes_common.py`，由 `__init__.py` 汇总注册。
+> 代码按功能域拆分到 `core/image_*.py` / `core/text_*.py` / `core/path_joiner.py` / `core/openrouter_*.py` 三个文件，共享工具在 `core/common.py`，由 `nodes/__init__.py` 汇总注册，根 `__init__.py` 只导出注册入口。
 
 ---
 
@@ -19,7 +19,7 @@
 | 8 | `WuddImageStitch`        | Wudd Image Stitch        | Wudd Nodes | ✅ 输入按 input_count |
 | 9 | `WuddOpenAIGPT54`        | Wudd OpenAI GPT-5.4      | Wudd Nodes | — |
 
-动态端口逻辑统一由 `web/dynamic_ports.js` 前端扩展驱动，ComfyUI 启动时通过 `WEB_DIRECTORY = "./web"` 自动加载。
+动态端口逻辑统一由 `web/js/dynamic_ports.js` 前端扩展驱动，ComfyUI 启动时通过 `WEB_DIRECTORY = "./web"` 自动加载。
 
 ---
 
@@ -29,18 +29,18 @@
 
 | 文件 | 职责 | 包含节点 |
 |------|------|----------|
-| `nodes_common.py` | 共享常量与工具 | —（无节点） |
-| `nodes_image.py`  | 图像类节点     | `WuddMultiSaveImage` / `WuddDropAlpha` / `WuddEdgePad` / `WuddImageListImporter` / `WuddImageStitch` |
-| `nodes_text.py`   | 文本类节点     | `WuddTextSplitter` / `WuddMultiTextSplitter` / `WuddPathJoiner` |
-| `nodes_api.py`    | 外部 API 节点  | `WuddOpenAIGPT54` |
+| `core/common.py` | 共享常量与工具 | —（无节点） |
+| `core/image_*.py`  | 图像类节点     | `WuddMultiSaveImage` / `WuddDropAlpha` / `WuddEdgePad` / `WuddImageListImporter` / `WuddImageStitch` |
+| `core/text_*.py` / `core/path_joiner.py`   | 文本类节点     | `WuddTextSplitter` / `WuddMultiTextSplitter` / `WuddPathJoiner` |
+| `core/openrouter_*.py`    | 外部 API 节点  | `WuddOpenAIGPT54` |
 | `__init__.py`     | 节点注册入口   | —（只做 import + mapping + WEB_DIRECTORY） |
-| `web/dynamic_ports.js` | 前端动态端口逻辑 | 4 个节点挂钩（见下文） |
+| `web/js/dynamic_ports.js` | 前端动态端口逻辑 | 4 个节点挂钩（见下文） |
 
-图像、文本、API 三个文件之间互不依赖，仅都 `from .nodes_common import …`。
+图像、文本、API 三个文件之间互不依赖，仅都 `from .common import …`。
 
 ---
 
-## 0. 模块级规范层（`nodes_common.py`）
+## 0. 模块级规范层（`core/common.py`）
 
 所有节点共用一层"规范层"集中声明于文件顶部，保证一致性、可维护性与性能：
 
@@ -64,7 +64,7 @@
 
 ## 1. WuddMultiSaveImage
 
-**源文件**：`nodes_image.py` · `FUNCTION = "save_images"` · `OUTPUT_NODE = True`
+**源文件**：`core/image_*.py` · `FUNCTION = "save_images"` · `OUTPUT_NODE = True`
 **作用**：把任意多张图批量落盘为 PNG 或 Jpegli（JPEG XL 团队的高质量 JPEG 编码器），并支持"追加 / 覆盖"两种命名策略。
 
 ### 输入
@@ -109,7 +109,7 @@
 
 ## 2. WuddDropAlpha
 
-**源文件**：`nodes_image.py` · `FUNCTION = "drop_alpha"`
+**源文件**：`core/image_*.py` · `FUNCTION = "drop_alpha"`
 **作用**：用背景（棋盘格或纯色）填充 mask 指示的透明区域，输出无 alpha 的 RGB 图；可选按内容自动裁剪。
 
 ### 输入
@@ -144,7 +144,7 @@
 
 ## 3. WuddEdgePad
 
-**源文件**：`nodes_image.py` · `FUNCTION = "pad_edges"` · `MAX_INPUTS = 16`
+**源文件**：`core/image_*.py` · `FUNCTION = "pad_edges"` · `MAX_INPUTS = 16`
 **作用**：为竖向全景拼图做"顶 / 底扩充 pad"预处理，让相邻图的色带自然融合，彻底消除硬色带。
 
 ### 输入
@@ -183,7 +183,7 @@
 
 ## 4. WuddPathJoiner
 
-**源文件**：`nodes_text.py` · `FUNCTION = "join_path"`
+**源文件**：`core/text_*.py` / `core/path_joiner.py` · `FUNCTION = "join_path"`
 **作用**：用 `/` 串联最多 5 段路径片段，跳过空段。
 
 ### 输入
@@ -208,7 +208,7 @@
 
 ## 5. WuddTextSplitter
 
-**源文件**：`nodes_text.py` · `FUNCTION = "split_text"`
+**源文件**：`core/text_*.py` / `core/path_joiner.py` · `FUNCTION = "split_text"`
 **作用**：按行切分多行文本，取第 `index` 行。
 
 ### 输入
@@ -233,7 +233,7 @@
 
 ## 6. WuddMultiTextSplitter
 
-**源文件**：`nodes_text.py` · `FUNCTION = "split_text"` · `MAX_OUTPUTS = 16`
+**源文件**：`core/text_*.py` / `core/path_joiner.py` · `FUNCTION = "split_text"` · `MAX_OUTPUTS = 16`
 **作用**：把多行文本一次分出最多 16 个输出端口，每端口一行。
 
 ### 输入
@@ -259,7 +259,7 @@
 
 ## 7. WuddImageListImporter
 
-**源文件**：`nodes_image.py` · `FUNCTION = "import_images"` · `MAX_IMAGES = 50`
+**源文件**：`core/image_*.py` · `FUNCTION = "import_images"` · `MAX_IMAGES = 50`
 **作用**：作为"图像列表源"节点，一次从 `input/` 目录选择多张图分别输出。
 
 ### 输入
@@ -299,7 +299,7 @@
 
 ## 8. WuddImageStitch
 
-**源文件**：`nodes_image.py` · `FUNCTION = "stitch"` · `MAX_INPUTS = 16`
+**源文件**：`core/image_*.py` · `FUNCTION = "stitch"` · `MAX_INPUTS = 16`
 **作用**：线性拼接多张图，`image_1` 为基准；支持四方向与间距 gap，其余图按基准轴尺寸等比缩放。
 
 ### 输入
@@ -343,7 +343,7 @@
 
 ## 9. WuddOpenAIGPT54
 
-**源文件**：`nodes_api.py` · `FUNCTION = "generate"`
+**源文件**：`core/openrouter_*.py` · `FUNCTION = "generate"`
 **作用**：调用 OpenAI 兼容 API（GPT-5.4 系列），支持 Responses API 与 Chat Completions 两种模式、可选图像输入、轮询等待异步响应。
 
 ### 输入
@@ -389,7 +389,7 @@
 
 ---
 
-## 前端扩展文件：`web/dynamic_ports.js`
+## 前端扩展文件：`web/js/dynamic_ports.js`
 
 **入口**：`app.registerExtension({ name: "Wudd.DynamicPorts", beforeRegisterNodeDef(nodeType, nodeData) { … } })`
 

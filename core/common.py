@@ -1,10 +1,10 @@
 """
 ComfyUI-Wudd — 共享工具与常量。
 
-按功能域拆分的四个模块共用此文件：
-    nodes_image.py  图像类节点
-    nodes_text.py   文本类节点
-    nodes_api.py    外部 API 调用类节点
+按功能域拆分的 core 模块共用此文件：
+    image.py  图像类处理逻辑
+    text.py   文本类处理逻辑
+    api.py    外部 API 调用逻辑
 
 本文件仅放"真正跨文件复用"的纯函数与常量；节点私有算法仍留在各自类里。
 """

@@ -98,7 +98,7 @@ Batch save one or more `IMAGE` inputs.
 - Save as PNG or Jpegli JPEG.
 - Supports append and overwrite naming modes.
 - Preserves ComfyUI workflow metadata in PNG output.
-- Jpegli uses the bundled `jxl-x64-windows-static/bin/cjpegli.exe` on Windows and falls back to PIL JPEG if unavailable.
+- Jpegli uses the bundled `bin/jxl-x64-windows-static/bin/cjpegli.exe` on Windows and falls back to PIL JPEG if unavailable.
 - Saved images are backed up in `temp/image/wudd_save_cache` before copying to the final output path.
 
 Inputs:

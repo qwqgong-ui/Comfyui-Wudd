@@ -1,4 +1,4 @@
-import { app } from "../../scripts/app.js";
+import { app } from "../../../scripts/app.js";
 
 function clampInt(value, min, max) {
     const n = Number.parseInt(value, 10);
