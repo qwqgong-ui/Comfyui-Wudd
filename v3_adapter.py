@@ -1,10 +1,9 @@
 """
 Native V3 node definitions for ComfyUI-Wudd-V3.
 
-The V3 package keeps WuddV3* node ids so it can live beside the original V1
-package, but schemas are declared directly with the Comfy V3 API. Heavy image,
-video, audio, and API implementation code is reused from the local nodes_* modules
-to avoid copying the same processing logic into two places.
+The V3 package keeps WuddV3* node ids and declares schemas directly with the
+Comfy V3 API. Runtime implementation code is loaded only from this package's
+local nodes_* modules.
 """
 
 from __future__ import annotations

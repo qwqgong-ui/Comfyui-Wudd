@@ -1,13 +1,13 @@
 # ComfyUI-Wudd-V3
 
-V3 adapter build of ComfyUI-Wudd. This folder is intended to live beside the
-original `ComfyUI-Wudd` V1 package without replacing it.
+Standalone V3 build of ComfyUI-Wudd. This folder is intended to be installed as
+`ComfyUI-Wudd-V3` and does not import from or require the old `ComfyUI-Wudd`
+custom node directory.
 
 - Python nodes use V3 `comfy_entrypoint`.
-- Node ids are prefixed as `WuddV3...` so existing V1 workflows keep using the
-  original `Wudd...` nodes.
-- The V3 wrappers call the existing V1 implementation classes to keep behavior
-  aligned during migration.
+- Node ids are prefixed as `WuddV3...`.
+- Browser, API, image, text, audio, and video implementations live inside this
+  repository.
 
 Custom nodes for [ComfyUI](https://github.com/comfyanonymous/ComfyUI), focused on practical image, text, audio/video, path, and API utility workflows.
 
@@ -17,8 +17,7 @@ Place this folder in `ComfyUI/custom_nodes/`:
 
 ```bash
 cd ComfyUI/custom_nodes
-# keep both folders when testing V3 side by side:
-# ComfyUI-Wudd
+# install only the V3 folder:
 # ComfyUI-Wudd-V3
 ```
 

@@ -526,6 +526,20 @@ def _consume_task_exception(task):
         task.result()
 
 
+_NO_EVALUATE_ARG = object()
+
+
+def _is_transient_page_navigation_error(exc):
+    message = str(exc)
+    transient_fragments = (
+        "Execution context was destroyed",
+        "most likely because of a navigation",
+        "Cannot find context with specified id",
+        "Frame was detached",
+    )
+    return any(fragment in message for fragment in transient_fragments)
+
+
 async def _await_interruptible(awaitable, interval=0.25):
     task = asyncio.ensure_future(awaitable)
     try:
@@ -543,6 +557,46 @@ async def _await_interruptible(awaitable, interval=0.25):
             with contextlib.suppress(BaseException):
                 await asyncio.wait_for(asyncio.shield(task), timeout=1.0)
         raise
+
+
+async def _wait_for_page_navigation_settled(page, timeout_seconds=10.0):
+    if page is None or _page_is_closed(page):
+        return
+    try:
+        await _await_interruptible(
+            page.wait_for_load_state(
+                "domcontentloaded",
+                timeout=max(1000, int(float(timeout_seconds) * 1000)),
+            ),
+        )
+    except Exception:
+        pass
+    await _sleep_interruptible(0.2)
+
+
+async def _page_evaluate_with_navigation_retry(
+    page,
+    script,
+    arg=_NO_EVALUATE_ARG,
+    attempts=4,
+    settle_timeout_seconds=10.0,
+):
+    last_error = None
+    attempts_count = max(1, int(attempts))
+    for attempt in range(attempts_count):
+        _check_interrupted()
+        try:
+            if arg is _NO_EVALUATE_ARG:
+                return await _await_interruptible(page.evaluate(script))
+            return await _await_interruptible(page.evaluate(script, arg))
+        except Exception as exc:
+            last_error = exc
+            if not _is_transient_page_navigation_error(exc) or attempt >= attempts_count - 1:
+                raise
+            await _wait_for_page_navigation_settled(page, settle_timeout_seconds)
+    if last_error is not None:
+        raise last_error
+    return None
 
 
 def _normalize_url(url, default):
@@ -814,7 +868,12 @@ async def _first_visible_locator(page, selectors, timeout_seconds):
 
 
 async def _assistant_texts(page):
-    values = await _await_interruptible(page.evaluate(ASSISTANT_TEXT_SCRIPT))
+    try:
+        values = await _page_evaluate_with_navigation_retry(page, ASSISTANT_TEXT_SCRIPT)
+    except Exception as exc:
+        if _is_transient_page_navigation_error(exc):
+            return []
+        raise
     return [_clean_response_text(value) for value in values if _clean_response_text(value)]
 
 
@@ -1137,7 +1196,12 @@ async def _url_to_pil_via_page(page, url, timeout_seconds):
     try:
         data_url = await _await_interruptible(
             asyncio.wait_for(
-                page.evaluate(URL_TO_DATA_URL_SCRIPT, url),
+                _page_evaluate_with_navigation_retry(
+                    page,
+                    URL_TO_DATA_URL_SCRIPT,
+                    url,
+                    settle_timeout_seconds=min(10.0, max(1.0, float(timeout_seconds))),
+                ),
                 timeout=max(1.0, float(timeout_seconds)),
             )
         )
@@ -1148,7 +1212,7 @@ async def _url_to_pil_via_page(page, url, timeout_seconds):
 
 async def _page_known_image_urls(page):
     try:
-        urls = await _await_interruptible(page.evaluate(GENERATED_IMAGE_URLS_SCRIPT))
+        urls = await _page_evaluate_with_navigation_retry(page, GENERATED_IMAGE_URLS_SCRIPT)
     except Exception:
         return []
     return [_normalize_image_url(url) for url in urls or []]
@@ -1335,12 +1399,17 @@ async def _collect_response_images(
     )
     if collector is not None:
         await collector.drain(0.25)
-    images.extend(await _latest_assistant_images(
-        page,
-        timeout_seconds,
-        ignored_keys=effective_ignored_keys,
-        ignored_fingerprints=effective_ignored_fingerprints,
-    ))
+    try:
+        images.extend(await _latest_assistant_images(
+            page,
+            timeout_seconds,
+            ignored_keys=effective_ignored_keys,
+            ignored_fingerprints=effective_ignored_fingerprints,
+        ))
+    except Exception as exc:
+        if not _is_transient_page_navigation_error(exc):
+            raise
+        await _wait_for_page_navigation_settled(page, min(10.0, max(1.0, float(timeout_seconds))))
     return _dedupe_images(images, ignored_fingerprints=effective_ignored_fingerprints)
 
 
@@ -1386,14 +1455,17 @@ async def _wait_for_response_images(
 
 async def _is_streaming(page):
     try:
-        return bool(await _await_interruptible(page.evaluate(STREAMING_SCRIPT)))
+        return bool(await _page_evaluate_with_navigation_retry(page, STREAMING_SCRIPT, attempts=2))
     except Exception:
         return False
 
 
 async def _try_stop_response(page):
     try:
-        await asyncio.wait_for(page.evaluate(STOP_RESPONSE_SCRIPT), timeout=3.0)
+        await asyncio.wait_for(
+            _page_evaluate_with_navigation_retry(page, STOP_RESPONSE_SCRIPT, attempts=1),
+            timeout=3.0,
+        )
     except Exception:
         pass
 
