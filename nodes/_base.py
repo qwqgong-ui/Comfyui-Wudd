@@ -41,6 +41,7 @@ from ..core.image_stitch import WuddImageStitch
 from ..core.path_joiner import WuddPathJoiner
 from ..core.text_multi_splitter import WuddMultiTextSplitter
 from ..core.text_prompt_list import WuddPromptListFromText
+from ..core.text_save import WuddSaveText
 from ..core.text_splitter import WuddTextSplitter
 from ..core.video_concat import WuddConcatVideos
 from ..core.video_fast_forward import WuddFastForwardVideo

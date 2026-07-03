@@ -11,6 +11,7 @@ from .wudd_v3_concat_videos import WuddV3ConcatVideos
 from .wudd_v3_text_splitter import WuddV3TextSplitter
 from .wudd_v3_multi_text_splitter import WuddV3MultiTextSplitter
 from .wudd_v3_prompt_list_from_text import WuddV3PromptListFromText
+from .wudd_v3_save_text import WuddV3SaveText
 from .wudd_v3_drop_alpha import WuddV3DropAlpha
 from .wudd_v3_image_expand import WuddV3ImageExpand
 from .wudd_v3_edge_pad import WuddV3EdgePad
@@ -36,6 +37,7 @@ WUDD_V3_NODE_CLASSES = {
     "WuddV3TextSplitter": WuddV3TextSplitter,
     "WuddV3MultiTextSplitter": WuddV3MultiTextSplitter,
     "WuddV3PromptListFromText": WuddV3PromptListFromText,
+    "WuddV3SaveText": WuddV3SaveText,
     "WuddV3DropAlpha": WuddV3DropAlpha,
     "WuddV3ImageExpand": WuddV3ImageExpand,
     "WuddV3EdgePad": WuddV3EdgePad,

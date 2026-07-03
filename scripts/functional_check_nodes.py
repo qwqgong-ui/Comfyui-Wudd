@@ -381,6 +381,25 @@ async def case_path_joiner(node_cls: type, ctx: CheckContext) -> dict[str, Any]:
     return {"inputs": inputs, "output": summarize_output(output)}
 
 
+async def case_save_text(node_cls: type, ctx: CheckContext) -> dict[str, Any]:
+    text = "functional save text\nsecond line"
+    inputs = {
+        "text": text,
+        "root_dir": "temp",
+        "file": "wudd_node_functional_check/saved_text.txt",
+        "append": "overwrite",
+        "insert": False,
+    }
+    output = await node_cls.execute(**inputs)
+    result, _ = node_result(output)
+    saved = Path(result[0])
+    if saved != ctx.temp_dir / "saved_text.txt":
+        raise AssertionError(f"Unexpected saved path: {saved}")
+    if not saved.exists() or saved.read_text(encoding="utf-8") != text:
+        raise AssertionError(f"Saved text not found or content mismatch: {saved}")
+    return {"inputs": inputs, "saved_file": str(saved), "output": summarize_output(output)}
+
+
 async def case_group_switch(node_cls: type, ctx: CheckContext) -> dict[str, Any]:
     inputs = {"enabled": False, "group_name": "groupA", "off_mode": "mute"}
     output = await node_cls.execute(**inputs)
@@ -626,6 +645,7 @@ CASES: list[Case] = [
     Case("WuddV3MultiTextSplitter", "multi output split", case_multi_text_splitter),
     Case("WuddV3PromptListFromText", "prompt list parsing", case_prompt_list),
     Case("WuddV3PathJoiner", "path join", case_path_joiner),
+    Case("WuddV3SaveText", "save text", case_save_text),
     Case("WuddV3GroupSwitch", "switch output", case_group_switch),
     Case("WuddV3DropAlpha", "mask composite", case_drop_alpha),
     Case("WuddV3ImageExpand", "expand right", case_image_expand),

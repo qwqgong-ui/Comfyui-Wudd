@@ -135,6 +135,22 @@ Inputs:
 - `preset`: `fast`, `medium`, `slow`
 - `audio_mode`: `copy`, `aac`, `none`
 
+### Wudd Save Text
+
+Save a `STRING` input to a UTF-8 text file under ComfyUI `output`, `input`, or `temp`.
+
+- Supports overwrite, append, and new-only save modes.
+- Allows subfolders in the file path while preventing paths from escaping the selected root directory.
+- Returns the saved file path as a `STRING`.
+
+Inputs:
+
+- `text`
+- `root_dir`: `output`, `input`, `temp`
+- `file`
+- `append`: `overwrite`, `append`, `new_only`
+- `insert`
+
 ### Wudd Video Fast Forward
 
 Speed up a `VIDEO` input and output a new `VIDEO`.

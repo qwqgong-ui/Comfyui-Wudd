@@ -654,6 +654,19 @@
   "WuddV3PromptListFromText": {
     "display_name": "Wudd V3 提示词列表"
   },
+  "WuddV3SaveText": {
+    "display_name": "Wudd V3 保存文本",
+    "inputs": {
+      "text": { "name": "文本" },
+      "root_dir": { "name": "根目录" },
+      "file": { "name": "文件" },
+      "append": { "name": "保存模式" },
+      "insert": { "name": "插入到开头" }
+    },
+    "outputs": {
+      "0": { "name": "路径" }
+    }
+  },
   "WuddV3DropAlpha": {
     "display_name": "Wudd V3 去除 Alpha"
   },
