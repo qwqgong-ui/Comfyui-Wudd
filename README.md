@@ -277,6 +277,8 @@ Submit a prompt and optional `IMAGE` to [chatgpt.com](https://chatgpt.com/) thro
   - `custom_user_data_dir`: use a manually supplied `user_data_dir`.
 - Uploads the first input image as a temporary PNG, fills the ChatGPT composer, submits with Enter by default, and waits for the response text to stabilize.
 - Exports images from the latest assistant response as a ComfyUI `IMAGE` batch. When the response contains no images, the node returns one 1x1 black placeholder image and `image_count = 0`.
+- Retries automatically when ChatGPT responds with an image-generation failure such as "I couldn't generate image" / "我未能生成图片" and no output image is found (`image_error_retries`).
+- Closes the ChatGPT tab after each run by default (`close_page_after_run`) so batch jobs do not leave many ChatGPT tabs open. `keep_browser_open` only controls whether a browser process launched by the node is kept open.
 - Returns:
   - `text`
   - `conversation_url`
@@ -290,7 +292,7 @@ Inputs:
 - `connection_mode`: `connect_or_launch_edge`, `connect_or_launch_chrome`, `connect_cdp`, `launch_chrome`, `launch_edge`
 - `new_chat`
 - `submit_action`: `press_enter`, `click_send_button`
-- advanced `chatgpt_url`, `cdp_url`, `wait_timeout_seconds`, `stable_seconds`, `upload_wait_seconds`, `keep_browser_open`, `profile_mode`, `profile_directory`, `browser_executable`, `user_data_dir`
+- advanced `chatgpt_url`, `cdp_url`, `wait_timeout_seconds`, `stable_seconds`, `upload_wait_seconds`, `keep_browser_open`, `background_browser`, `close_page_after_run`, `image_error_retries`, `profile_mode`, `profile_directory`, `browser_executable`, `user_data_dir`
 
 To connect to an already-running Edge or Chrome profile, start the browser with remote debugging enabled, for example:
 

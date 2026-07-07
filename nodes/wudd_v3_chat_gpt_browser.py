@@ -66,6 +66,15 @@ class WuddV3ChatGPTBrowser(_FingerprintBackendNode, IO.ComfyNode):
                 ),
                 _image_autogrow("images", IMAGE_16_NAMES, min_count=1, optional_items=True),
                 IO.String.Input("browser_executable", default="", advanced=True),
+                IO.Boolean.Input("close_page_after_run", default=True, advanced=True),
+                IO.Int.Input(
+                    "image_error_retries",
+                    default=2,
+                    min=0,
+                    max=10,
+                    step=1,
+                    advanced=True,
+                ),
             ],
             outputs=[
                 IO.String.Output("text", display_name="text"),
@@ -93,6 +102,8 @@ class WuddV3ChatGPTBrowser(_FingerprintBackendNode, IO.ComfyNode):
         run_id,
         images: IO.Autogrow.Type | None = None,
         browser_executable="",
+        close_page_after_run=True,
+        image_error_retries=2,
     ) -> IO.NodeOutput:
         return await cls._run_backend(
             "submit",
@@ -105,11 +116,13 @@ class WuddV3ChatGPTBrowser(_FingerprintBackendNode, IO.ComfyNode):
             new_chat=new_chat,
             submit_action=submit_action,
             keep_browser_open=keep_browser_open,
+            close_page_after_run=close_page_after_run,
             background_browser=background_browser,
             parallel_pages=parallel_pages,
             run_id=run_id,
             images=_numbered_kwargs(images, "image_"),
             browser_executable=browser_executable,
+            image_error_retries=image_error_retries,
             unique_id=cls.hidden.unique_id,
         )
 

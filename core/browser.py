@@ -47,6 +47,27 @@ BROWSER_CONNECTION_MODES = [
     "launch_edge",
 ]
 SUBMIT_ACTIONS = ["press_enter", "click_send_button"]
+CHATGPT_TAB_REFRESH_SECONDS = 180.0
+CHATGPT_RETRY_CLICK_COOLDOWN_SECONDS = 5.0
+IMAGE_GENERATION_FAILURE_PHRASES = (
+    "由于我这边发生了错误，我未能生成图片",
+    "我未能生成图片",
+    "未能生成图片",
+    "生成图片时出错",
+    "生成图像时出错",
+    "couldn't generate image",
+    "couldn't generate the image",
+    "could not generate image",
+    "could not generate the image",
+    "unable to generate image",
+    "unable to generate the image",
+    "failed to generate image",
+    "failed to generate the image",
+    "wasn't able to generate image",
+    "wasn't able to generate the image",
+    "was not able to generate image",
+    "was not able to generate the image",
+)
 _BROWSER_EXECUTION_LOCKS = {}
 _BROWSER_PAGE_POOL_LOCKS = {}
 _CHATGPT_RUN_STATES = {}
@@ -166,6 +187,167 @@ STOP_RESPONSE_SCRIPT = """
       label.includes("停止") ||
       label.includes("cancel response")
     ) {
+      button.click();
+      return true;
+    }
+  }
+  return false;
+}
+"""
+
+DISMISS_FREQUENT_REQUEST_NOTICE_SCRIPT = """
+() => {
+  const noticePhrases = [
+    "请求过于频繁",
+    "过于频繁",
+    "请稍等几分钟后再重试",
+    "too frequent",
+    "rate limit",
+    "temporarily limited",
+    "please wait a few minutes",
+  ];
+  const dismissLabels = [
+    "明白了",
+    "知道了",
+    "我知道了",
+    "got it",
+    "ok",
+    "okay",
+  ];
+
+  function textOf(el) {
+    return (el && (el.innerText || el.textContent || "") || "").trim();
+  }
+
+  function normalizedText(el) {
+    return textOf(el).replace(/\\s+/g, " ").toLowerCase();
+  }
+
+  function isVisible(el) {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      rect.width > 0 &&
+      rect.height > 0;
+  }
+
+  function hasNoticeText(el) {
+    const text = normalizedText(el);
+    return noticePhrases.some((phrase) => text.includes(phrase.toLowerCase()));
+  }
+
+  function isDismissButton(button) {
+    const label = (
+      button.getAttribute("aria-label") ||
+      button.getAttribute("title") ||
+      textOf(button)
+    ).trim().toLowerCase();
+    return dismissLabels.some((candidate) => label.includes(candidate));
+  }
+
+  function noticeContainerFor(button) {
+    let el = button;
+    for (let depth = 0; el && el !== document.body && el !== document.documentElement && depth < 12; depth += 1) {
+      if (isVisible(el) && hasNoticeText(el)) {
+        const rect = el.getBoundingClientRect();
+        const role = (el.getAttribute("role") || "").toLowerCase();
+        const ariaModal = (el.getAttribute("aria-modal") || "").toLowerCase() === "true";
+        const text = textOf(el);
+        const noticeSized = rect.width <= window.innerWidth * 0.98 &&
+          rect.height <= window.innerHeight * 0.85;
+        if ((role === "dialog" || ariaModal || noticeSized) && text.length <= 2000) {
+          return el;
+        }
+      }
+      el = el.parentElement;
+    }
+    return null;
+  }
+
+  const buttons = Array.from(document.querySelectorAll("button"));
+  for (const button of buttons.reverse()) {
+    if (!isVisible(button) || !isDismissButton(button)) continue;
+    if (!noticeContainerFor(button)) continue;
+    button.click();
+    return true;
+  }
+  return false;
+}
+"""
+
+CLICK_CHATGPT_RETRY_BUTTON_SCRIPT = """
+() => {
+  const retryLabels = [
+    "retry",
+    "try again",
+    "重试",
+    "再试一次",
+    "重新尝试"
+  ];
+
+  function textOf(el) {
+    return (el && (el.innerText || el.textContent || "") || "").trim();
+  }
+
+  function isVisible(el) {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      rect.width > 0 &&
+      rect.height > 0;
+  }
+
+  function isDisabled(el) {
+    return Boolean(
+      el.disabled ||
+      (el.getAttribute("aria-disabled") || "").toLowerCase() === "true" ||
+      (el.getAttribute("disabled") !== null)
+    );
+  }
+
+  function buttonLabel(button) {
+    return (
+      button.getAttribute("aria-label") ||
+      button.getAttribute("title") ||
+      button.getAttribute("data-testid") ||
+      textOf(button)
+    ).replace(/\\s+/g, " ").trim().toLowerCase();
+  }
+
+  function isRetryButton(button) {
+    const label = buttonLabel(button);
+    return retryLabels.some((candidate) => label.includes(candidate));
+  }
+
+  function assistantScopes() {
+    const selectors = [
+      '[data-message-author-role="assistant"]',
+      'article[aria-label*="assistant" i]',
+      'article[data-testid*="assistant" i]',
+      'article'
+    ];
+    const seen = new Set();
+    const scopes = [];
+    for (const selector of selectors) {
+      for (const el of document.querySelectorAll(selector)) {
+        if (seen.has(el) || !isVisible(el)) continue;
+        seen.add(el);
+        scopes.push(el);
+      }
+    }
+    return scopes.slice(-3).reverse();
+  }
+
+  const scopes = assistantScopes();
+  const searchRoots = scopes.length ? scopes : [document.body];
+  for (const root of searchRoots) {
+    const buttons = Array.from(root.querySelectorAll('button, [role="button"]'));
+    for (const button of buttons.reverse()) {
+      if (!isVisible(button) || isDisabled(button) || !isRetryButton(button)) continue;
       button.click();
       return true;
     }
@@ -839,13 +1021,14 @@ def _cleanup_failed_browser_launch(browser_name, process, user_data_dir):
     _kill_browser_processes_for_user_data_dir(browser_name, user_data_dir)
 
 
-async def _launch_browser_and_wait(browser_name, cdp_base, browser_executable, user_data_dir):
+async def _launch_browser_and_wait(browser_name, cdp_base, browser_executable, user_data_dir, background_browser=False):
     user_data_dir = _resolve_user_data_dir(user_data_dir)
     spawned = _launch_browser(
         browser_name,
         cdp_base,
         browser_executable,
         user_data_dir,
+        background_browser=background_browser,
     )
     try:
         await _await_interruptible(
@@ -920,6 +1103,7 @@ def _launch_browser(
     cdp_url,
     browser_executable,
     user_data_dir,
+    background_browser=False,
 ):
     cdp_base, host, port = _normalize_cdp_url(cdp_url)
     if _is_cdp_ready(cdp_base):
@@ -944,11 +1128,13 @@ def _launch_browser(
         "--disable-background-timer-throttling",
         "--disable-backgrounding-occluded-windows",
         "--disable-renderer-backgrounding",
-        "--start-minimized",
-        "about:blank",
     ]
+    if background_browser:
+        cmd.append("--start-minimized")
+    cmd.append("about:blank")
+
     startupinfo = None
-    if sys.platform == "win32":
+    if sys.platform == "win32" and background_browser:
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         startupinfo.wShowWindow = 7  # SW_SHOWMINNOACTIVE
@@ -1054,6 +1240,7 @@ async def _first_visible_locator(page, selectors, timeout_seconds):
     last_error = None
     while time.monotonic() < deadline:
         _check_interrupted()
+        await _dismiss_frequent_request_notice(page)
         elapsed = time.monotonic() - started_at
         active_selectors = list(primary_selectors)
         if elapsed >= min(8.0, max(1.0, float(timeout_seconds) * 0.1)):
@@ -1233,6 +1420,13 @@ def _prompt_likely_requests_image(prompt):
         "\u6444\u5f71",
     )
     return any(keyword in text for keyword in keywords)
+
+
+def _image_generation_failed_text(text):
+    normalized = " ".join(str(text or "").lower().split())
+    if not normalized:
+        return False
+    return any(phrase.lower() in normalized for phrase in IMAGE_GENERATION_FAILURE_PHRASES)
 
 
 def _pil_from_data_url(data_url):
@@ -1585,6 +1779,7 @@ async def _wait_for_response_images(
 
     while True:
         _check_interrupted()
+        await _dismiss_frequent_request_notice(page)
         images = await _collect_response_images(page, collector, min(5.0, float(timeout_seconds)))
         if images:
             return images
@@ -1624,6 +1819,55 @@ async def _try_stop_response(page):
         )
     except Exception:
         pass
+
+
+async def _dismiss_frequent_request_notice(page):
+    if page is None or _page_is_closed(page):
+        return False
+    try:
+        return bool(await asyncio.wait_for(
+            _page_evaluate_with_navigation_retry(
+                page,
+                DISMISS_FREQUENT_REQUEST_NOTICE_SCRIPT,
+                attempts=1,
+            ),
+            timeout=3.0,
+        ))
+    except Exception:
+        return False
+
+
+async def _click_chatgpt_retry_button(page):
+    if page is None or _page_is_closed(page):
+        return False
+    try:
+        return bool(await asyncio.wait_for(
+            _page_evaluate_with_navigation_retry(
+                page,
+                CLICK_CHATGPT_RETRY_BUTTON_SCRIPT,
+                attempts=1,
+            ),
+            timeout=3.0,
+        ))
+    except Exception:
+        return False
+
+
+async def _refresh_chatgpt_page_quietly(page, timeout_seconds=30.0):
+    if page is None or _page_is_closed(page):
+        return False
+    refresh_timeout = max(5000, int(min(30.0, max(1.0, float(timeout_seconds))) * 1000))
+    try:
+        await _await_interruptible(
+            page.reload(wait_until="domcontentloaded", timeout=refresh_timeout),
+            interval=0.25,
+        )
+    except Exception:
+        if page is None or _page_is_closed(page):
+            return False
+    await _wait_for_page_navigation_settled(page, min(10.0, max(1.0, float(timeout_seconds))))
+    await _dismiss_frequent_request_notice(page)
+    return not _page_is_closed(page)
 
 
 def _normalize_composer_text(text):
@@ -1712,6 +1956,7 @@ async def _fill_composer(composer, page, prompt, timeout_seconds):
     modifier = "Meta" if sys.platform == "darwin" else "Control"
 
     for _ in range(3):
+        await _dismiss_frequent_request_notice(page)
         await _wait_for_composer_ready(composer, timeout_seconds)
         await _await_interruptible(composer.click())
         try:
@@ -1741,6 +1986,7 @@ async def _click_send_button(page, timeout_seconds, required=True):
     deadline = time.monotonic() + max(1.0, float(timeout_seconds))
     while time.monotonic() < deadline:
         _check_interrupted()
+        await _dismiss_frequent_request_notice(page)
         for selector in SEND_BUTTON_SELECTORS:
             try:
                 button = page.locator(selector).last
@@ -1765,15 +2011,31 @@ async def _response_started(page, previous_count):
     return len(texts) > previous_count or await _is_streaming(page)
 
 
+async def _submit_chatgpt_composer(page, composer, submit_action, previous_count, wait_timeout_seconds):
+    if submit_action == "click_send_button":
+        await _click_send_button(page, wait_timeout_seconds)
+        return
+
+    await _await_interruptible(composer.press("Enter"))
+    await _sleep_interruptible(2.0)
+    frequent_notice_dismissed = await _dismiss_frequent_request_notice(page)
+    if not frequent_notice_dismissed and not await _response_started(page, previous_count):
+        await _click_send_button(page, min(30.0, float(wait_timeout_seconds)), required=True)
+
+
 async def _wait_for_response(page, previous_count, timeout_seconds, stable_seconds):
     deadline = time.monotonic() + max(1.0, float(timeout_seconds))
     stable_seconds = max(0.5, float(stable_seconds))
     last_text = ""
     last_change = time.monotonic()
+    last_retry_click = 0.0
+    last_tab_refresh = time.monotonic()
+    ignored_retry_text = ""
     started = False
 
     while time.monotonic() < deadline:
         _check_interrupted()
+        await _dismiss_frequent_request_notice(page)
         texts = await _assistant_texts(page)
         current = ""
         if len(texts) > previous_count:
@@ -1782,6 +2044,22 @@ async def _wait_for_response(page, previous_count, timeout_seconds, stable_secon
         elif started and texts:
             current = texts[-1]
 
+        now = time.monotonic()
+        if started and now - last_retry_click >= CHATGPT_RETRY_CLICK_COOLDOWN_SECONDS:
+            if await _click_chatgpt_retry_button(page):
+                last_retry_click = time.monotonic()
+                last_tab_refresh = last_retry_click
+                ignored_retry_text = current or last_text
+                last_text = ""
+                last_change = last_retry_click
+                await _sleep_interruptible(1.0)
+                continue
+
+        if ignored_retry_text and current == ignored_retry_text:
+            current = ""
+        elif ignored_retry_text and current:
+            ignored_retry_text = ""
+
         if current and current != last_text:
             last_text = current
             last_change = time.monotonic()
@@ -1789,6 +2067,15 @@ async def _wait_for_response(page, previous_count, timeout_seconds, stable_secon
         streaming = await _is_streaming(page)
         if last_text and started and not streaming and time.monotonic() - last_change >= stable_seconds:
             return last_text
+
+        now = time.monotonic()
+        if (
+            now - last_tab_refresh >= CHATGPT_TAB_REFRESH_SECONDS and
+            deadline - now > 5.0
+        ):
+            await _refresh_chatgpt_page_quietly(page, min(30.0, float(timeout_seconds)))
+            last_tab_refresh = time.monotonic()
+            last_change = last_tab_refresh
 
         await _sleep_interruptible(0.5)
 
@@ -1803,11 +2090,15 @@ async def _wait_for_response_result(page, collector, previous_count, timeout_sec
     image_expected = _prompt_likely_requests_image(prompt)
     last_text = ""
     last_change = time.monotonic()
+    last_retry_click = 0.0
+    last_tab_refresh = time.monotonic()
+    ignored_retry_text = ""
     started = False
     text_ready = False
 
     while time.monotonic() < deadline:
         _check_interrupted()
+        await _dismiss_frequent_request_notice(page)
         images = await _collect_response_images(page, collector, min(3.0, float(timeout_seconds)))
         if images:
             return last_text, images
@@ -1820,6 +2111,23 @@ async def _wait_for_response_result(page, collector, previous_count, timeout_sec
         elif started and texts:
             current = texts[-1]
 
+        now = time.monotonic()
+        if started and now - last_retry_click >= CHATGPT_RETRY_CLICK_COOLDOWN_SECONDS:
+            if await _click_chatgpt_retry_button(page):
+                last_retry_click = time.monotonic()
+                last_tab_refresh = last_retry_click
+                ignored_retry_text = current or last_text
+                last_text = ""
+                last_change = last_retry_click
+                text_ready = False
+                await _sleep_interruptible(1.0)
+                continue
+
+        if ignored_retry_text and current == ignored_retry_text:
+            current = ""
+        elif ignored_retry_text and current:
+            ignored_retry_text = ""
+
         if current and current != last_text:
             last_text = current
             last_change = time.monotonic()
@@ -1827,6 +2135,8 @@ async def _wait_for_response_result(page, collector, previous_count, timeout_sec
 
         streaming = await _is_streaming(page)
         if last_text and started and not streaming and time.monotonic() - last_change >= stable_seconds:
+            if _image_generation_failed_text(last_text):
+                return last_text, []
             if not image_expected:
                 images = await _wait_for_response_images(
                     page,
@@ -1837,6 +2147,16 @@ async def _wait_for_response_result(page, collector, previous_count, timeout_sec
                 )
                 return last_text, images
             text_ready = True
+
+        now = time.monotonic()
+        if (
+            now - last_tab_refresh >= CHATGPT_TAB_REFRESH_SECONDS and
+            deadline - now > 5.0
+        ):
+            await _refresh_chatgpt_page_quietly(page, min(30.0, float(timeout_seconds)))
+            last_tab_refresh = time.monotonic()
+            last_change = last_tab_refresh
+            text_ready = False
 
         await _sleep_interruptible(0.5 if not text_ready else 1.0)
 
@@ -1983,11 +2303,44 @@ async def _minimize_browser_window(page):
                 await cdp_session.detach()
 
 
+async def _minimize_browser_context_windows(context):
+    if context is None:
+        return
+    seen_window_ids = set()
+    for page in list(getattr(context, "pages", []) or []):
+        if page is None or _page_is_closed(page):
+            continue
+        cdp_session = None
+        try:
+            cdp_session = await _await_interruptible(page.context.new_cdp_session(page))
+            window_info = await _await_interruptible(cdp_session.send("Browser.getWindowForTarget"))
+            window_id = window_info.get("windowId")
+            if window_id is None or window_id in seen_window_ids:
+                continue
+            seen_window_ids.add(window_id)
+            await _await_interruptible(
+                cdp_session.send(
+                    "Browser.setWindowBounds",
+                    {"windowId": window_id, "bounds": {"windowState": "minimized"}},
+                )
+            )
+        except Exception:
+            continue
+        finally:
+            if cdp_session is not None:
+                with contextlib.suppress(Exception):
+                    await cdp_session.detach()
+
+
 async def _get_chatgpt_page(session, chatgpt_url, new_chat, parallel_pages, background_browser):
     page, page_id = await _acquire_chatgpt_page(session, chatgpt_url, new_chat, parallel_pages)
     try:
+        if background_browser:
+            await _minimize_browser_window(page)
         if new_chat or not _is_chatgpt_page_url(page.url):
             await _goto_chatgpt(page, chatgpt_url)
+            if background_browser:
+                await _minimize_browser_window(page)
         return page, page_id
     except BaseException:
         await _close_page_quietly(page)
@@ -2001,24 +2354,51 @@ async def _connect_browser(
     cdp_url,
     browser_executable,
     user_data_dir,
+    background_browser=False,
 ):
     cdp_base, _, _ = _normalize_cdp_url(cdp_url)
     spawned = None
 
     if connection_mode == "connect_or_launch_chrome":
         if not _is_cdp_ready(cdp_base):
-            spawned = await _launch_browser_and_wait("chrome", cdp_base, browser_executable, user_data_dir)
+            spawned = await _launch_browser_and_wait(
+                "chrome",
+                cdp_base,
+                browser_executable,
+                user_data_dir,
+                background_browser=background_browser,
+            )
     elif connection_mode == "connect_or_launch_edge":
         if not _is_cdp_ready(cdp_base):
-            spawned = await _launch_browser_and_wait("edge", cdp_base, browser_executable, user_data_dir)
+            spawned = await _launch_browser_and_wait(
+                "edge",
+                cdp_base,
+                browser_executable,
+                user_data_dir,
+                background_browser=background_browser,
+            )
     elif connection_mode == "launch_chrome":
-        spawned = await _launch_browser_and_wait("chrome", cdp_base, browser_executable, user_data_dir)
+        spawned = await _launch_browser_and_wait(
+            "chrome",
+            cdp_base,
+            browser_executable,
+            user_data_dir,
+            background_browser=background_browser,
+        )
     elif connection_mode == "launch_edge":
-        spawned = await _launch_browser_and_wait("edge", cdp_base, browser_executable, user_data_dir)
+        spawned = await _launch_browser_and_wait(
+            "edge",
+            cdp_base,
+            browser_executable,
+            user_data_dir,
+            background_browser=background_browser,
+        )
 
     _check_interrupted()
     browser = await _await_interruptible(playwright.chromium.connect_over_cdp(cdp_base))
     context = browser.contexts[0] if browser.contexts else await browser.new_context()
+    if background_browser and spawned is not None:
+        await _minimize_browser_context_windows(context)
     return browser, context, spawned
 
 
@@ -2028,6 +2408,7 @@ async def _get_browser_session(
     cdp_url,
     browser_executable,
     user_data_dir,
+    background_browser=False,
 ):
     cdp_base, _, _ = _normalize_cdp_url(cdp_url)
     session_key = _browser_session_key(cdp_base)
@@ -2037,6 +2418,8 @@ async def _get_browser_session(
     try:
         session = _BROWSER_SESSIONS.get(session_key)
         if _browser_session_is_connected(session):
+            if background_browser and session.spawned is not None:
+                await _minimize_browser_context_windows(session.context)
             return session
 
         if session is not None:
@@ -2051,6 +2434,7 @@ async def _get_browser_session(
                 cdp_base,
                 browser_executable,
                 user_data_dir,
+                background_browser=background_browser,
             )
         except BaseException:
             with contextlib.suppress(Exception):
@@ -2123,6 +2507,8 @@ class WuddChatGPTBrowser:
             "optional": {
                 "image": ("IMAGE",),
                 "browser_executable": ("STRING", {"default": "", "advanced": True}),
+                "close_page_after_run": ("BOOLEAN", {"default": True, "advanced": True}),
+                "image_error_retries": ("INT", {"default": 2, "min": 0, "max": 10, "step": 1, "advanced": True}),
             },
             "hidden": {"unique_id": "UNIQUE_ID"},
         }
@@ -2153,6 +2539,8 @@ class WuddChatGPTBrowser:
         image=None,
         images=None,
         browser_executable="",
+        close_page_after_run=True,
+        image_error_retries=2,
         user_data_dir=DEFAULT_BROWSER_USER_DATA_DIR,
         unique_id=None,
         **image_kwargs,
@@ -2166,6 +2554,11 @@ class WuddChatGPTBrowser:
         if submit_action not in SUBMIT_ACTIONS:
             raise ValueError(f"Unsupported submit_action: {submit_action}")
         parallel_pages = _normalize_parallel_pages(parallel_pages)
+        try:
+            image_error_retries = int(image_error_retries)
+        except (TypeError, ValueError):
+            image_error_retries = 2
+        image_error_retries = max(0, min(10, image_error_retries))
 
         try:
             from playwright.async_api import async_playwright
@@ -2183,6 +2576,7 @@ class WuddChatGPTBrowser:
         page_id = None
         image_collector = None
         run_owner = None
+        close_page_after_run = bool(close_page_after_run) or not bool(keep_browser_open)
         _check_interrupted()
 
         try:
@@ -2193,6 +2587,7 @@ class WuddChatGPTBrowser:
                 cdp_base,
                 browser_executable,
                 user_data_dir,
+                background_browser=bool(background_browser),
             )
             page, page_id = await _get_chatgpt_page(
                 browser_session,
@@ -2201,49 +2596,65 @@ class WuddChatGPTBrowser:
                 parallel_pages,
                 bool(background_browser),
             )
-            composer = await _first_visible_locator(page, COMPOSER_SELECTORS, wait_timeout_seconds)
-            previous_count = len(await _assistant_texts(page))
+            await _dismiss_frequent_request_notice(page)
             ignored_image_fingerprints = set()
-
             if input_frames:
                 for frame in input_frames:
                     ignored_image_fingerprints.add(_image_fingerprint(tensor_to_pil(frame).convert("RGB")))
-                upload_paths = _make_upload_pngs(input_frames)
-                await _attach_image_file(page, upload_paths, wait_timeout_seconds)
-                if float(upload_wait_seconds) > 0:
-                    await _sleep_interruptible(float(upload_wait_seconds))
+
+            last_generation_error = ""
+            for attempt_index in range(image_error_retries + 1):
+                _check_interrupted()
+                await _dismiss_frequent_request_notice(page)
+                previous_count = len(await _assistant_texts(page))
                 composer = await _first_visible_locator(page, COMPOSER_SELECTORS, wait_timeout_seconds)
 
-            ignored_image_urls = await _page_known_image_urls(page)
-            image_collector = _ImageResponseCollector(
-                page,
-                ignored_urls=ignored_image_urls,
-                ignored_fingerprints=ignored_image_fingerprints,
+                if input_frames:
+                    attempt_upload_paths = _make_upload_pngs(input_frames)
+                    upload_paths.extend(attempt_upload_paths)
+                    await _attach_image_file(page, attempt_upload_paths, wait_timeout_seconds)
+                    if float(upload_wait_seconds) > 0:
+                        await _sleep_interruptible(float(upload_wait_seconds))
+                    composer = await _first_visible_locator(page, COMPOSER_SELECTORS, wait_timeout_seconds)
+
+                if image_collector is not None:
+                    image_collector.stop()
+                    image_collector = None
+                ignored_image_urls = await _page_known_image_urls(page)
+                image_collector = _ImageResponseCollector(
+                    page,
+                    ignored_urls=ignored_image_urls,
+                    ignored_fingerprints=ignored_image_fingerprints,
+                )
+                image_collector.start()
+
+                composer = await _first_visible_locator(page, COMPOSER_SELECTORS, wait_timeout_seconds)
+                await _fill_composer(composer, page, prompt, wait_timeout_seconds)
+                await _submit_chatgpt_composer(page, composer, submit_action, previous_count, wait_timeout_seconds)
+
+                if background_browser:
+                    await _minimize_browser_window(page)
+
+                text, images = await _wait_for_response_result(
+                    page,
+                    image_collector,
+                    previous_count,
+                    wait_timeout_seconds,
+                    stable_seconds,
+                    prompt,
+                )
+                if images or not _image_generation_failed_text(text):
+                    return (text, page.url, _pil_images_to_tensor_batch(images), len(images))
+
+                last_generation_error = text
+                if attempt_index >= image_error_retries:
+                    break
+                await _sleep_interruptible(1.0)
+
+            raise RuntimeError(
+                "ChatGPT image generation failed after "
+                f"{image_error_retries + 1} attempt(s): {last_generation_error}"
             )
-            image_collector.start()
-            composer = await _first_visible_locator(page, COMPOSER_SELECTORS, wait_timeout_seconds)
-            await _fill_composer(composer, page, prompt, wait_timeout_seconds)
-
-            if submit_action == "click_send_button":
-                await _click_send_button(page, wait_timeout_seconds)
-            else:
-                await _await_interruptible(composer.press("Enter"))
-                await _sleep_interruptible(2.0)
-                if not await _response_started(page, previous_count):
-                    await _click_send_button(page, min(30.0, float(wait_timeout_seconds)), required=True)
-
-            if background_browser:
-                await _minimize_browser_window(page)
-
-            text, images = await _wait_for_response_result(
-                page,
-                image_collector,
-                previous_count,
-                wait_timeout_seconds,
-                stable_seconds,
-                prompt,
-            )
-            return (text, page.url, _pil_images_to_tensor_batch(images), len(images))
         except BaseException:
             if page is not None:
                 await _try_stop_response(page)
@@ -2253,6 +2664,8 @@ class WuddChatGPTBrowser:
             if image_collector is not None:
                 image_collector.stop()
             if page_id is not None:
+                if page is not None and close_page_after_run:
+                    await _close_page_quietly(page)
                 await _release_chatgpt_page_slot(browser_session, page_id)
 
             for upload_path in upload_paths:

@@ -627,6 +627,7 @@ async def case_chatgpt_browser(node_cls: type, ctx: CheckContext) -> dict[str, A
         "new_chat": True,
         "submit_action": "press_enter",
         "keep_browser_open": True,
+        "close_page_after_run": True,
         "background_browser": True,
         "parallel_pages": 1,
         "run_id": int(time.time()),
