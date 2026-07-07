@@ -6,6 +6,16 @@ const MODE_BYPASS = 4;
 const GROUP_SWITCH_CLASS = "WuddV3GroupSwitch";
 const AUTO_GROUP_NAMES = new Set(["auto", "current", "self"]);
 const GROUP_STATES_PROPERTY = "group_states";
+const MIN_NODE_WIDTH = 320;
+const GROUP_WIDGET_RESERVED_WIDTH = 98;
+const MIN_GROUP_WIDGET_LABEL_WIDTH = 120;
+const FALLBACK_CHAR_WIDTH = 7;
+const GROUP_COLOR_FALLBACK = "#777777";
+const GROUP_COLOR_LABEL_PREFIX = "    ";
+const GROUP_COLOR_LABEL_PADDING = 26;
+const GROUP_COLOR_SWATCH_X = 22;
+const GROUP_COLOR_SWATCH_SIZE = 10;
+const GROUP_COLOR_SWATCH_RADIUS = 3;
 
 function getNodeWidget(node, name) {
     return node.widgets?.find(w => w.name === name);
@@ -106,14 +116,125 @@ function getGroupKey(group) {
     return `title:${getGroupTitle(group)}`;
 }
 
-function formatGroupWidgetName(group) {
+function clampColorChannel(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return 0;
+    return Math.max(0, Math.min(255, Math.round(n)));
+}
+
+function normalizeCssColor(value) {
+    if (Array.isArray(value) && value.length >= 3) {
+        return `rgb(${clampColorChannel(value[0])}, ${clampColorChannel(value[1])}, ${clampColorChannel(value[2])})`;
+    }
+
+    if (value && typeof value === "object") {
+        const r = value.r ?? value.red;
+        const g = value.g ?? value.green;
+        const b = value.b ?? value.blue;
+        if ([r, g, b].every(v => Number.isFinite(Number(v)))) {
+            return `rgb(${clampColorChannel(r)}, ${clampColorChannel(g)}, ${clampColorChannel(b)})`;
+        }
+    }
+
+    const color = String(value || "").trim();
+    if (!color || color.toLowerCase() === "transparent") return "";
+    return color;
+}
+
+function getGroupColor(group) {
+    const candidates = [
+        group?.color,
+        group?._color,
+        group?.bgcolor,
+        group?._bgcolor,
+        group?.properties?.color,
+        group?.properties?.bgcolor,
+    ];
+
+    for (const candidate of candidates) {
+        const colorOption = globalThis.LGraphCanvas?.node_colors?.[candidate];
+        const groupColor = normalizeCssColor(colorOption?.groupcolor || colorOption?.color || colorOption?.bgcolor);
+        if (groupColor) return groupColor;
+
+        const color = normalizeCssColor(candidate);
+        if (color) return color;
+    }
+    return GROUP_COLOR_FALLBACK;
+}
+
+function fallbackTextWidth(text) {
+    let units = 0;
+    for (const char of Array.from(String(text || ""))) {
+        units += char.charCodeAt(0) > 255 ? 2 : 1;
+    }
+    return units * FALLBACK_CHAR_WIDTH;
+}
+
+function measureTextWidth(text) {
+    const ctx = app.canvas?.ctx;
+    if (!ctx?.measureText) return fallbackTextWidth(text);
+
+    const previousFont = ctx.font;
+    try {
+        ctx.font = "12px Arial";
+        const width = ctx.measureText(String(text || "")).width;
+        return Number.isFinite(width) ? width : fallbackTextWidth(text);
+    } catch (e) {
+        return fallbackTextWidth(text);
+    } finally {
+        ctx.font = previousFont;
+    }
+}
+
+function truncateMiddleToWidth(text, maxWidth) {
+    const value = String(text || "");
+    if (measureTextWidth(value) <= maxWidth) return value;
+
+    const chars = Array.from(value);
+    const marker = "...";
+    if (chars.length <= marker.length || maxWidth <= measureTextWidth(marker)) return marker;
+
+    let best = marker;
+    let low = 1;
+    let high = chars.length - 1;
+
+    while (low <= high) {
+        const keep = Math.floor((low + high) / 2);
+        const head = Math.ceil(keep * 0.62);
+        const tail = keep - head;
+        const candidate = `${chars.slice(0, head).join("")}${marker}${tail ? chars.slice(chars.length - tail).join("") : ""}`;
+
+        if (measureTextWidth(candidate) <= maxWidth) {
+            best = candidate;
+            low = keep + 1;
+        } else {
+            high = keep - 1;
+        }
+    }
+
+    return best;
+}
+
+function getGroupWidgetLabelWidth(node) {
+    const width = Number(node?.size?.[0]) || MIN_NODE_WIDTH;
+    return Math.max(MIN_GROUP_WIDGET_LABEL_WIDTH, width - GROUP_WIDGET_RESERVED_WIDTH);
+}
+
+function formatGroupWidgetName(group, node = null) {
     const title = getGroupTitle(group);
-    return group?.id != null ? `Group ${group.id}: ${title}` : `Group: ${title}`;
+    const name = group?.id != null ? `Group ${group.id}: ${title}` : `Group: ${title}`;
+    if (!node) return name;
+
+    const labelWidth = Math.max(
+        MIN_GROUP_WIDGET_LABEL_WIDTH,
+        getGroupWidgetLabelWidth(node) - GROUP_COLOR_LABEL_PADDING,
+    );
+    return `${GROUP_COLOR_LABEL_PREFIX}${truncateMiddleToWidth(name, labelWidth)}`;
 }
 
 function getGroupSignature() {
     return getGraphGroups()
-        .map(group => `${getGroupKey(group)}:${getGroupTitle(group)}`)
+        .map(group => `${getGroupKey(group)}:${getGroupTitle(group)}:${getGroupColor(group)}`)
         .sort()
         .join("|");
 }
@@ -225,10 +346,50 @@ function applyGroupMode(group, enabled, ownerNode) {
 
 function refreshNode(node) {
     if (node.setSize && node.computeSize) {
-        try { node.setSize(node.computeSize()); } catch (e) {}
+        try {
+            const computed = node.computeSize();
+            if (Array.isArray(computed) || ArrayBuffer.isView(computed)) {
+                const currentWidth = Number(node.size?.[0]) || 0;
+                const currentHeight = Number(node.size?.[1]) || 0;
+                const width = Math.max(currentWidth, Number(computed[0]) || 0, MIN_NODE_WIDTH);
+                const height = Math.max(currentHeight, Number(computed[1]) || 0);
+                if (width !== currentWidth || height !== currentHeight) {
+                    node.setSize([width, height]);
+                }
+            }
+        } catch (e) {}
     }
     node.setDirtyCanvas?.(true, true);
     app.graph?.setDirtyCanvas?.(true, true);
+}
+
+function syncGroupWidgetLabels(node) {
+    const groups = getGraphGroups();
+    let changed = false;
+
+    for (const group of groups) {
+        const widget = node.widgets?.find(w => w.__wuddGroupSwitchDynamic && w.__wuddGroupKey === getGroupKey(group));
+        if (!widget) continue;
+
+        const name = formatGroupWidgetName(group, node);
+        const color = getGroupColor(group);
+        if (widget.name !== name) {
+            widget.name = name;
+            changed = true;
+        }
+        if (widget.__wuddGroupColor !== color) {
+            widget.__wuddGroupColor = color;
+            changed = true;
+        }
+        widget.__wuddGroupFullName = formatGroupWidgetName(group);
+    }
+
+    node.__wuddGroupSwitchLabelWidth = Math.round(Number(node.size?.[0]) || 0);
+    if (changed) {
+        node.setDirtyCanvas?.(true, true);
+        app.graph?.setDirtyCanvas?.(true, true);
+    }
+    return changed;
 }
 
 function syncGroupWidgets(node) {
@@ -249,7 +410,8 @@ function syncGroupWidgets(node) {
         const key = getGroupKey(group);
         let widget = node.widgets?.find(w => w.__wuddGroupSwitchDynamic && w.__wuddGroupKey === key);
         const value = getGroupState(node, group);
-        const name = formatGroupWidgetName(group);
+        const name = formatGroupWidgetName(group, node);
+        const color = getGroupColor(group);
 
         if (!widget) {
             widget = node.addWidget("toggle", name, value, () => {
@@ -259,10 +421,17 @@ function syncGroupWidgets(node) {
             widget.serialize = false;
             widget.__wuddGroupSwitchDynamic = true;
             widget.__wuddGroupKey = key;
+            widget.__wuddGroupFullName = formatGroupWidgetName(group);
+            widget.__wuddGroupColor = color;
             changed = true;
         } else {
             if (widget.name !== name) {
                 widget.name = name;
+                changed = true;
+            }
+            widget.__wuddGroupFullName = formatGroupWidgetName(group);
+            if (widget.__wuddGroupColor !== color) {
+                widget.__wuddGroupColor = color;
                 changed = true;
             }
             if (widget.value !== value) {
@@ -341,6 +510,32 @@ function patchGroupSwitchQueuePrompt() {
     app.__wuddV3GroupSwitchWrappedQueuePrompt = wrappedQueuePrompt;
 }
 
+function patchDrawNodeWidgetsTarget(target) {
+    if (!target ||
+        typeof target.drawNodeWidgets !== "function" ||
+        target.__wuddV3GroupSwitchWrappedDrawNodeWidgets) {
+        return false;
+    }
+
+    const originalDrawNodeWidgets = target.drawNodeWidgets;
+    target.drawNodeWidgets = function (node, posY, ctx) {
+        const result = originalDrawNodeWidgets.apply(this, arguments);
+        if (isGroupSwitchNode(node)) {
+            try { drawGroupColorSwatches(node, ctx); } catch (e) {}
+        }
+        return result;
+    };
+    target.__wuddV3GroupSwitchWrappedDrawNodeWidgets = true;
+    return true;
+}
+
+function patchGroupSwitchWidgetDrawing() {
+    const canvasClass = globalThis.LGraphCanvas || app.canvas?.constructor;
+    const patchedPrototype = patchDrawNodeWidgetsTarget(canvasClass?.prototype);
+    if (patchedPrototype) return true;
+    return patchDrawNodeWidgetsTarget(app.canvas);
+}
+
 function wrapCoreWidget(node, widgetName) {
     const widget = getNodeWidget(node, widgetName);
     if (!widget || widget.__wuddGroupSwitchWrapped) return;
@@ -362,6 +557,10 @@ function wrapCoreWidget(node, widgetName) {
 
 function setupGroupSwitchNode(node) {
     patchGroupSwitchQueuePrompt();
+    patchGroupSwitchWidgetDrawing();
+    node.flags ??= {};
+    node.flags.resizable = true;
+    node.resizable = true;
 
     const widgetNames = ["enabled", "group_name", "off_mode"];
     const widgets = widgetNames.map(name => getNodeWidget(node, name)).filter(Boolean);
@@ -384,6 +583,55 @@ function maybeRefreshGroupWidgets(node) {
     const signature = getGroupSignature();
     if (signature !== node.__wuddGroupSwitchSignature) {
         syncGroupWidgets(node);
+        return;
+    }
+
+    const width = Math.round(Number(node.size?.[0]) || 0);
+    if (width !== node.__wuddGroupSwitchLabelWidth) {
+        syncGroupWidgetLabels(node);
+    }
+}
+
+function roundedRect(ctx, x, y, width, height, radius) {
+    const r = Math.min(radius, width / 2, height / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + width - r, y);
+    ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+    ctx.lineTo(x + width, y + height - r);
+    ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+    ctx.lineTo(x + r, y + height);
+    ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+}
+
+function drawGroupColorSwatches(node, ctx) {
+    if (!ctx || !node.widgets?.length) return;
+
+    const widgetHeight = globalThis.LiteGraph?.NODE_WIDGET_HEIGHT || 20;
+    for (const widget of node.widgets) {
+        if (!widget?.__wuddGroupSwitchDynamic) continue;
+
+        const y = Number(widget.last_y ?? widget.y);
+        if (!Number.isFinite(y)) continue;
+
+        const swatchY = y + Math.max(0, (widgetHeight - GROUP_COLOR_SWATCH_SIZE) / 2);
+        ctx.save();
+        try {
+            ctx.fillStyle = widget.__wuddGroupColor || GROUP_COLOR_FALLBACK;
+            roundedRect(ctx, GROUP_COLOR_SWATCH_X, swatchY, GROUP_COLOR_SWATCH_SIZE, GROUP_COLOR_SWATCH_SIZE, GROUP_COLOR_SWATCH_RADIUS);
+            ctx.fill();
+
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.38)";
+            ctx.lineWidth = 1;
+            roundedRect(ctx, GROUP_COLOR_SWATCH_X + 0.5, swatchY + 0.5, GROUP_COLOR_SWATCH_SIZE - 1, GROUP_COLOR_SWATCH_SIZE - 1, GROUP_COLOR_SWATCH_RADIUS);
+            ctx.stroke();
+        } catch (e) {
+        } finally {
+            ctx.restore();
+        }
     }
 }
 
