@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ._base import *
+from .._base import *
 
 
 class WuddV3MultiSaveImage(_BackendNode, IO.ComfyNode):
@@ -8,10 +8,10 @@ class WuddV3MultiSaveImage(_BackendNode, IO.ComfyNode):
 
     @classmethod
     def define_schema(cls):
-        return IO.Schema(
+        return _with_help(IO.Schema(
             node_id="WuddV3MultiSaveImage",
             display_name="Wudd V3 Multi Save",
-            category=WUDD_V3_CATEGORY,
+            category=IMAGE_CATEGORY,
             inputs=[
                 _image_autogrow("images", IMAGE_100_NAMES, min_count=1),
                 IO.String.Input("filename_prefix", default="Wudd_Img"),
@@ -39,7 +39,7 @@ class WuddV3MultiSaveImage(_BackendNode, IO.ComfyNode):
             outputs=[],
             hidden=[IO.Hidden.prompt, IO.Hidden.extra_pnginfo],
             is_output_node=True,
-        )
+        ))
 
     @classmethod
     async def execute(

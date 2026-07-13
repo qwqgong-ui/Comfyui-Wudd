@@ -1,12 +1,5 @@
 """Core implementation for WuddVideoAudioExtractor."""
 import os
-import shutil
-import subprocess
-import uuid
-
-import folder_paths
-
-from .common import WUDD_CATEGORY, CREATE_NO_WINDOW
 
 class WuddVideoAudioExtractor:
     @staticmethod
@@ -89,20 +82,6 @@ class WuddVideoAudioExtractor:
         }
         duration = audio["waveform"].shape[-1] / float(audio["sample_rate"])
         return audio, int(audio["sample_rate"]), duration
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "video": ("VIDEO",),
-                "audio_stream_index": ("INT", {"default": 0, "min": 0, "max": 16, "step": 1}),
-            },
-        }
-
-    RETURN_TYPES = ("AUDIO", "INT", "FLOAT")
-    RETURN_NAMES = ("audio", "sample_rate", "duration_seconds")
-    FUNCTION = "extract_audio"
-    CATEGORY = WUDD_CATEGORY
 
     @classmethod
     def IS_CHANGED(cls, video, audio_stream_index=0):

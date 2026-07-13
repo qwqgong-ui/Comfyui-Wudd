@@ -4,42 +4,6 @@ from .openrouter_common import *
 
 
 class WuddOpenRouterGPTImage(_OpenRouterBase):
-    @classmethod
-    def INPUT_TYPES(cls):
-        optional = _system_and_extra_inputs()
-        optional.update(_image_port_inputs(MAX_IMAGE_NODE_INPUTS))
-        return {
-            "required": {
-                "prompt": ("STRING", {"default": "", "multiline": True}),
-                "api_key": ("STRING", {"default": ""}),
-                "model": (OPENAI_GPT_IMAGE_MODELS, {"default": "openai/gpt-5.4-image-2"}),
-                "response_modalities": (IMAGE_RESPONSE_MODALITIES, {"default": "IMAGE+TEXT"}),
-                "aspect_ratio": (STANDARD_ASPECT_RATIOS, {"default": "auto"}),
-                "image_size": (GPT_IMAGE_SIZES, {"default": "auto"}),
-                "max_tokens": (
-                    "INT",
-                    {"default": 4096, "min": 16, "max": 128000, "step": 1},
-                ),
-                "reasoning_effort": (REASONING_EFFORTS, {"default": "none"}),
-                "seed": (
-                    "INT",
-                    {
-                        "default": 0,
-                        "min": 0,
-                        "max": 2147483647,
-                        "step": 1,
-                        "control_after_generate": True,
-                    },
-                ),
-                **_api_runtime_inputs(),
-            },
-            "optional": optional,
-        }
-
-    RETURN_TYPES = ("IMAGE", "STRING", "STRING")
-    RETURN_NAMES = ("image", "text", "response_id")
-    CATEGORY = IMAGE_CATEGORY
-
     async def generate(
         self,
         prompt,

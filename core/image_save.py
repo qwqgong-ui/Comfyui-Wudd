@@ -7,17 +7,13 @@ import uuid
 import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
-import numpy as np
-from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 import folder_paths
 
 from .common import (
-    WUDD_CATEGORY,
     CREATE_NO_WINDOW,
     collect_image_inputs,
     tensor_to_pil,
-    pil_to_tensor,
 )
 
 class WuddMultiSaveImage:
@@ -40,30 +36,6 @@ class WuddMultiSaveImage:
         if not self.cjpegli_available:
             print(f"[Wudd] cjpegli not found in local bin, bundled tools, or PATH; "
                   f"jpegli mode will fall back to PIL JPEG.")
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "image_1": ("IMAGE",),
-                "save_mode": (["append", "overwrite"],),
-                "extension": (["png", "jpegli"],),
-                "quality": ("INT", {"default": 90, "min": 1, "max": 100}),
-                "progressive": ("BOOLEAN", {"default": True}),
-                "enable_xyb": ("BOOLEAN", {"default": False}),
-                "chroma_subsampling": (["444", "440", "422", "420"],),
-            },
-            "optional": {
-                # optional 使得该 widget 既保留输入框，又可直接接 STRING 节点
-                "filename_prefix": ("STRING", {"default": "Wudd_Img"}),
-            },
-            "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
-        }
-
-    RETURN_TYPES = ()
-    FUNCTION = "save_images"
-    OUTPUT_NODE = True
-    CATEGORY = WUDD_CATEGORY
 
     # ---------- helpers ----------
 
@@ -169,6 +141,14 @@ class WuddMultiSaveImage:
     @staticmethod
     def _pnginfo_items(prompt, extra_pnginfo):
         """镜像 ComfyUI 默认 SaveImage 的元数据写入，保证 PNG 能拖回还原工作流。"""
+        try:
+            from comfy.cli_args import args as comfy_args
+            if getattr(comfy_args, "disable_metadata", False):
+                return []
+        except Exception:
+            # 保持旧版 ComfyUI / 独立测试环境中的既有保存行为。
+            pass
+
         items = []
         if prompt is not None:
             items.append(("prompt", json.dumps(prompt)))

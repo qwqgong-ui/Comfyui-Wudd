@@ -16,6 +16,10 @@ const GROUP_COLOR_LABEL_PADDING = 26;
 const GROUP_COLOR_SWATCH_X = 22;
 const GROUP_COLOR_SWATCH_SIZE = 10;
 const GROUP_COLOR_SWATCH_RADIUS = 3;
+let groupRevision = 0;
+let cachedGroupSignatureRevision = -1;
+let cachedGroupSignature = "";
+let groupRefreshScheduled = false;
 
 function getNodeWidget(node, name) {
     return node.widgets?.find(w => w.name === name);
@@ -103,6 +107,108 @@ function boundsOverlap(a, b) {
 
 function getGraphGroups() {
     return Array.from(app.graph?._groups || app.graph?.groups || []);
+}
+
+function isGraphGroup(item) {
+    const GroupClass = globalThis.LGraphGroup;
+    if (GroupClass && item instanceof GroupClass) return true;
+    if (item?.constructor?.name === "LGraphGroup") return true;
+    return !!item?._bounding && !Array.isArray(item?.inputs) && !Array.isArray(item?.outputs);
+}
+
+function refreshGroupSwitchNodes() {
+    for (const node of app.graph?._nodes || []) {
+        if (!isGroupSwitchNode(node) || !node.__wuddGroupSwitchReady) continue;
+        try {
+            syncGroupWidgets(node);
+            applyGroupSwitchNode(node);
+        } catch (e) {
+            console.error("[Wudd] Group Switch refresh error:", e);
+        }
+    }
+}
+
+function invalidateGroupCache() {
+    groupRevision += 1;
+    cachedGroupSignatureRevision = -1;
+    if (groupRefreshScheduled) return;
+    groupRefreshScheduled = true;
+    const schedule = globalThis.requestAnimationFrame || (callback => setTimeout(callback, 0));
+    schedule(() => {
+        groupRefreshScheduled = false;
+        observeCurrentGroups();
+        refreshGroupSwitchNodes();
+    });
+}
+
+function observeGroupProperty(group, property) {
+    const marker = `__wuddObserved_${property}`;
+    if (!group || group[marker]) return;
+    const descriptor = Object.getOwnPropertyDescriptor(group, property);
+    if (!descriptor || !descriptor.configurable || descriptor.get || descriptor.set) return;
+    let value = descriptor.value;
+    Object.defineProperty(group, property, {
+        configurable: true,
+        enumerable: descriptor.enumerable,
+        get() { return value; },
+        set(next) {
+            if (next === value) return;
+            value = next;
+            invalidateGroupCache();
+        },
+    });
+    Object.defineProperty(group, marker, { value: true, configurable: true });
+}
+
+function observeGroup(group) {
+    if (!group || group.__wuddGroupObserved) return;
+    Object.defineProperty(group, "__wuddGroupObserved", { value: true, configurable: true });
+    for (const property of ["title", "color", "_color", "bgcolor", "_bgcolor"]) {
+        observeGroupProperty(group, property);
+    }
+    for (const method of ["move", "setPosition", "setSize", "resize", "configure"]) {
+        patchAfter(group, method, invalidateGroupCache);
+    }
+}
+
+function observeCurrentGroups() {
+    for (const group of getGraphGroups()) observeGroup(group);
+}
+
+function patchAfter(target, methodName, callback) {
+    if (!target || typeof target[methodName] !== "function") return false;
+    const marker = `__wuddGroupPatched_${methodName}`;
+    if (target[marker]) return true;
+    const original = target[methodName];
+    target[methodName] = function () {
+        const result = original.apply(this, arguments);
+        callback.apply(this, arguments);
+        return result;
+    };
+    target[marker] = true;
+    return true;
+}
+
+function patchGroupEvents() {
+    const firstGroup = getGraphGroups()[0];
+    const groupPrototype = globalThis.LGraphGroup?.prototype ||
+        (firstGroup ? Object.getPrototypeOf(firstGroup) : null);
+    for (const method of ["move", "setPosition", "setSize", "resize", "configure"]) {
+        patchAfter(groupPrototype, method, invalidateGroupCache);
+    }
+
+    const graphPrototype = globalThis.LGraph?.prototype || app.graph?.constructor?.prototype;
+    for (const method of ["add", "remove"]) {
+        patchAfter(graphPrototype, method, function (item) {
+            if (!isGraphGroup(item)) return;
+            observeGroup(item);
+            invalidateGroupCache();
+        });
+    }
+    for (const method of ["clear", "configure"]) {
+        patchAfter(graphPrototype, method, invalidateGroupCache);
+    }
+    observeCurrentGroups();
 }
 
 function getGroupTitle(group) {
@@ -233,10 +339,13 @@ function formatGroupWidgetName(group, node = null) {
 }
 
 function getGroupSignature() {
-    return getGraphGroups()
+    if (cachedGroupSignatureRevision === groupRevision) return cachedGroupSignature;
+    cachedGroupSignature = getGraphGroups()
         .map(group => `${getGroupKey(group)}:${getGroupTitle(group)}:${getGroupColor(group)}`)
         .sort()
         .join("|");
+    cachedGroupSignatureRevision = groupRevision;
+    return cachedGroupSignature;
 }
 
 function isGraphNode(item) {
@@ -247,6 +356,39 @@ function isGroupSwitchNode(node) {
     return node?.comfyClass === GROUP_SWITCH_CLASS ||
            node?.type === GROUP_SWITCH_CLASS ||
            node?.constructor?.nodeData?.name === GROUP_SWITCH_CLASS;
+}
+
+function getConfiguredGroupName(node) {
+    return String(getNodeWidgetValue(node, "group_name", "") || "").trim();
+}
+
+function compareNodeIds(a, b) {
+    const aNumber = Number(a?.id);
+    const bNumber = Number(b?.id);
+    if (Number.isFinite(aNumber) && Number.isFinite(bNumber) && aNumber !== bNumber) {
+        return aNumber - bNumber;
+    }
+    return String(a?.id ?? "").localeCompare(String(b?.id ?? ""), undefined, { numeric: true });
+}
+
+function getDynamicGroupSwitchOwner() {
+    return Array.from(app.graph?._nodes || [])
+        .filter(node => isGroupSwitchNode(node) && !getConfiguredGroupName(node))
+        .sort(compareNodeIds)[0] || null;
+}
+
+function canControlDynamicGroups(node, warn = false) {
+    if (getConfiguredGroupName(node)) return true;
+    const owner = getDynamicGroupSwitchOwner();
+    const allowed = !owner || owner === node;
+    if (!allowed && warn && !node.__wuddGroupSwitchConflictWarned) {
+        console.warn(
+            `[Wudd] Multiple Group Switch nodes have an empty group_name. ` +
+            `Node ${owner.id} is the deterministic all-groups owner; node ${node.id} is passive until a group_name is set.`,
+        );
+        node.__wuddGroupSwitchConflictWarned = true;
+    }
+    return allowed;
 }
 
 function getGroupNodes(group) {
@@ -280,7 +422,7 @@ function groupArea(group) {
 
 function findTargetGroup(node) {
     const groups = getGraphGroups();
-    const configuredName = String(getNodeWidgetValue(node, "group_name", "") || "").trim();
+    const configuredName = getConfiguredGroupName(node);
     const normalized = configuredName.toLowerCase();
 
     if (!AUTO_GROUP_NAMES.has(normalized)) {
@@ -416,7 +558,9 @@ function syncGroupWidgets(node) {
         if (!widget) {
             widget = node.addWidget("toggle", name, value, () => {
                 setGroupState(node, group, widget.value);
-                applyGroupMode(group, widget.value, node);
+                if (canControlDynamicGroups(node, true)) {
+                    applyGroupMode(group, widget.value, node);
+                }
             }, { on: "run", off: "off" });
             widget.serialize = false;
             widget.__wuddGroupSwitchDynamic = true;
@@ -442,6 +586,7 @@ function syncGroupWidgets(node) {
     }
 
     node.__wuddGroupSwitchSignature = getGroupSignature();
+    node.__wuddGroupSwitchRevision = groupRevision;
     if (changed) refreshNode(node);
     return groups.length;
 }
@@ -467,6 +612,7 @@ function applySingleGroupSwitch(node) {
 }
 
 function applyDynamicGroupSwitches(node) {
+    if (!canControlDynamicGroups(node, true)) return false;
     const groupCount = syncGroupWidgets(node);
     if (!groupCount) return applySingleGroupSwitch(node);
 
@@ -478,7 +624,7 @@ function applyDynamicGroupSwitches(node) {
 }
 
 function applyGroupSwitchNode(node) {
-    const configuredName = String(getNodeWidgetValue(node, "group_name", "") || "").trim();
+    const configuredName = getConfiguredGroupName(node);
     if (configuredName) {
         return applySingleGroupSwitch(node);
     }
@@ -495,19 +641,23 @@ function applyAllGroupSwitchNodes() {
     }
 }
 
-function patchGroupSwitchQueuePrompt() {
-    if (typeof app.queuePrompt !== "function" ||
-        app.queuePrompt === app.__wuddV3GroupSwitchWrappedQueuePrompt) {
+function patchGroupSwitchGraphToPrompt() {
+    if (app.__wuddV3GroupSwitchGraphToPromptInstalled ||
+        typeof app.graphToPrompt !== "function") {
         return;
     }
 
-    const originalQueuePrompt = app.queuePrompt;
-    const wrappedQueuePrompt = async function () {
+    const originalGraphToPrompt = app.graphToPrompt;
+    const wrappedGraphToPrompt = async function () {
+        // Apply immediately before every real graph serialization. This keeps
+        // batch/queued prompts from relying on mutable state set outside the
+        // graphToPrompt lifecycle.
         applyAllGroupSwitchNodes();
-        return await originalQueuePrompt.apply(this, arguments);
+        return await originalGraphToPrompt.apply(this, arguments);
     };
-    app.queuePrompt = wrappedQueuePrompt;
-    app.__wuddV3GroupSwitchWrappedQueuePrompt = wrappedQueuePrompt;
+    app.graphToPrompt = wrappedGraphToPrompt;
+    app.__wuddV3GroupSwitchWrappedGraphToPrompt = wrappedGraphToPrompt;
+    app.__wuddV3GroupSwitchGraphToPromptInstalled = true;
 }
 
 function patchDrawNodeWidgetsTarget(target) {
@@ -544,7 +694,7 @@ function wrapCoreWidget(node, widgetName) {
     widget.callback = function () {
         const result = originalCallback?.apply(this, arguments);
         if (widgetName === "enabled") {
-            const configuredName = String(getNodeWidgetValue(node, "group_name", "") || "").trim();
+            const configuredName = getConfiguredGroupName(node);
             if (configuredName) applySingleGroupSwitch(node);
             else setAllGroupStates(node, toBoolean(widget.value));
         } else {
@@ -556,7 +706,7 @@ function wrapCoreWidget(node, widgetName) {
 }
 
 function setupGroupSwitchNode(node) {
-    patchGroupSwitchQueuePrompt();
+    patchGroupSwitchGraphToPrompt();
     patchGroupSwitchWidgetDrawing();
     node.flags ??= {};
     node.flags.resizable = true;
@@ -577,19 +727,6 @@ function setupGroupSwitchNode(node) {
     syncGroupWidgets(node);
     node.__wuddGroupSwitchReady = true;
     setTimeout(() => applyGroupSwitchNode(node), 50);
-}
-
-function maybeRefreshGroupWidgets(node) {
-    const signature = getGroupSignature();
-    if (signature !== node.__wuddGroupSwitchSignature) {
-        syncGroupWidgets(node);
-        return;
-    }
-
-    const width = Math.round(Number(node.size?.[0]) || 0);
-    if (width !== node.__wuddGroupSwitchLabelWidth) {
-        syncGroupWidgetLabels(node);
-    }
 }
 
 function roundedRect(ctx, x, y, width, height, radius) {
@@ -638,7 +775,8 @@ function drawGroupColorSwatches(node, ctx) {
 app.registerExtension({
     name: "WuddV3.GroupSwitch",
     setup() {
-        patchGroupSwitchQueuePrompt();
+        patchGroupSwitchGraphToPrompt();
+        patchGroupEvents();
     },
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== GROUP_SWITCH_CLASS) return;
@@ -660,10 +798,10 @@ app.registerExtension({
             } catch (e) {}
         };
 
-        const onDrawBackground = nodeType.prototype.onDrawBackground;
-        nodeType.prototype.onDrawBackground = function () {
-            if (onDrawBackground) onDrawBackground.apply(this, arguments);
-            try { maybeRefreshGroupWidgets(this); } catch (e) {}
+        const onResize = nodeType.prototype.onResize;
+        nodeType.prototype.onResize = function () {
+            if (onResize) onResize.apply(this, arguments);
+            try { syncGroupWidgetLabels(this); } catch (e) {}
         };
 
         const getExtraMenuOptions = nodeType.prototype.getExtraMenuOptions;

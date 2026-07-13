@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ._base import *
+from .._base import *
 
 
 class WuddV3PathJoiner(_BackendNode, IO.ComfyNode):
@@ -8,10 +8,10 @@ class WuddV3PathJoiner(_BackendNode, IO.ComfyNode):
 
     @classmethod
     def define_schema(cls):
-        return IO.Schema(
+        return _with_help(IO.Schema(
             node_id="WuddV3PathJoiner",
             display_name="Wudd V3 Path Joiner",
-            category=WUDD_V3_CATEGORY,
+            category=IO_CATEGORY,
             inputs=[
                 IO.Int.Input("count", default=2, min=1, max=5),
                 IO.String.Input("segment_1", default=""),
@@ -21,7 +21,7 @@ class WuddV3PathJoiner(_BackendNode, IO.ComfyNode):
                 IO.String.Input("segment_5", default=""),
             ],
             outputs=[IO.String.Output("path", display_name="path")],
-        )
+        ))
 
     @classmethod
     async def execute(

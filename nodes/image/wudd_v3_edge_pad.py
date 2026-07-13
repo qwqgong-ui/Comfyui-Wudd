@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ._base import *
+from .._base import *
 
 
 class WuddV3EdgePad(_BackendNode, IO.ComfyNode):
@@ -8,10 +8,10 @@ class WuddV3EdgePad(_BackendNode, IO.ComfyNode):
 
     @classmethod
     def define_schema(cls):
-        return IO.Schema(
+        return _with_help(IO.Schema(
             node_id="WuddV3EdgePad",
             display_name="Wudd V3 Edge Pad",
-            category=WUDD_V3_CATEGORY,
+            category=IMAGE_CATEGORY,
             inputs=[
                 _image_autogrow("images", IMAGE_16_NAMES, min_count=1),
                 IO.Int.Input("pad_px", default=100, min=10, max=500, step=1),
@@ -24,7 +24,7 @@ class WuddV3EdgePad(_BackendNode, IO.ComfyNode):
                 IO.Image.Output(f"image_{i}", display_name=f"image_{i}")
                 for i in range(1, WuddEdgePad.MAX_INPUTS + 1)
             ],
-        )
+        ))
 
     @classmethod
     async def execute(

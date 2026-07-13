@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ._base import *
+from .._base import *
 
 
 class WuddV3OpenRouterClaudeText(_OpenRouterV3Node, IO.ComfyNode):
@@ -8,7 +8,7 @@ class WuddV3OpenRouterClaudeText(_OpenRouterV3Node, IO.ComfyNode):
 
     @classmethod
     def define_schema(cls):
-        return IO.Schema(
+        return _with_help(IO.Schema(
             node_id="WuddV3OpenRouterClaudeText",
             display_name="Wudd V3 OpenRouter Claude Text",
             category=OPENROUTER_TEXT_CATEGORY,
@@ -36,7 +36,7 @@ class WuddV3OpenRouterClaudeText(_OpenRouterV3Node, IO.ComfyNode):
                 IO.String.Output("reasoning", display_name="reasoning"),
                 IO.String.Output("response_id", display_name="response_id"),
             ],
-        )
+        ))
 
     @classmethod
     async def execute(

@@ -1,25 +1,7 @@
 """Core implementation for WuddPromptListFromText."""
 import re
 
-from .common import WUDD_CATEGORY
-
 class WuddPromptListFromText:
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "text": ("STRING", {"multiline": True, "default": ""}),
-                "skip_empty": ("BOOLEAN", {"default": True}),
-                "strip_numbering": ("BOOLEAN", {"default": True}),
-            }
-        }
-
-    RETURN_TYPES = ("STRING", "INT")
-    RETURN_NAMES = ("prompts", "count")
-    OUTPUT_IS_LIST = (True, False)
-    FUNCTION = "to_list"
-    CATEGORY = WUDD_CATEGORY
-
     _NUMBERING_RE = re.compile(
         r"^\s*(?:[-*]\s+|(?:第\s*)?\d+\s*(?:页|[.、)\-]|[:：](?!\d))\s*|page\s*\d+\s*[:：.)-]?\s*)",
         re.IGNORECASE,

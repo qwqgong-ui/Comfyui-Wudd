@@ -11,14 +11,11 @@ from urllib.parse import urljoin, urlparse
 import numpy as np
 from PIL import Image
 
-from .common import WUDD_CATEGORY, tensor_to_base64_png
+from .common import tensor_to_base64_png
 
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_CHAT_PATH = "chat/completions"
-
-TEXT_CATEGORY = f"{WUDD_CATEGORY}/OpenRouter/Text"
-IMAGE_CATEGORY = f"{WUDD_CATEGORY}/OpenRouter/Image"
 
 MAX_TEXT_IMAGE_INPUTS = 16
 MAX_IMAGE_NODE_INPUTS = 16
@@ -509,7 +506,6 @@ def _pil_images_to_tensor_batch(images):
 
 
 class _OpenRouterBase:
-    FUNCTION = "generate"
 
     @classmethod
     def IS_CHANGED(cls, *args, **kwargs):

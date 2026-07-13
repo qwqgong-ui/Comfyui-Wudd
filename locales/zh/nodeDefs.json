@@ -1,715 +1,476 @@
 {
-  "WuddMultiSaveImage": {
-    "display_name": "Wudd 批量保存图像",
-    "description": "批量保存一个或多个图像输入，支持 PNG 和 Jpegli JPEG，并可选择追加或覆盖命名。",
+  "WuddV3MultiSaveImage": {
+    "display_name": "Wudd V3 批量保存图像",
+    "description": "将一个或多个 IMAGE 输入保存到 ComfyUI output 目录，支持 PNG 和 Jpegli JPEG。",
     "inputs": {
-      "image_1": { "name": "图像 1" },
-      "image_2": { "name": "图像 2" },
-      "image_3": { "name": "图像 3" },
-      "image_4": { "name": "图像 4" },
-      "image_5": { "name": "图像 5" },
-      "image_6": { "name": "图像 6" },
-      "image_7": { "name": "图像 7" },
-      "image_8": { "name": "图像 8" },
-      "image_9": { "name": "图像 9" },
-      "image_10": { "name": "图像 10" },
-      "image_11": { "name": "图像 11" },
-      "image_12": { "name": "图像 12" },
-      "image_13": { "name": "图像 13" },
-      "image_14": { "name": "图像 14" },
-      "image_15": { "name": "图像 15" },
-      "image_16": { "name": "图像 16" },
-      "save_mode": { "name": "保存模式" },
-      "extension": { "name": "文件格式" },
-      "quality": { "name": "质量" },
-      "progressive": { "name": "渐进式" },
-      "enable_xyb": { "name": "启用 XYB" },
-      "chroma_subsampling": { "name": "色度子采样" },
-      "filename_prefix": { "name": "文件名前缀" }
+      "images": { "name": "图像", "tooltip": "动态图像输入。每张需要保存的图片添加一个端口。" },
+      "filename_prefix": { "name": "文件名前缀", "tooltip": "相对 ComfyUI output 目录的输出路径和文件名前缀。" },
+      "save_mode": { "name": "保存模式", "tooltip": "选择追加数字后缀，或覆盖同名文件。" },
+      "extension": { "name": "文件格式", "tooltip": "输出图片格式。" },
+      "quality": { "name": "质量", "tooltip": "Jpegli 模式使用的 JPEG 质量。" },
+      "progressive": { "name": "渐进式", "tooltip": "在支持时写出渐进式 JPEG。" },
+      "enable_xyb": { "name": "启用 XYB", "tooltip": "启用 Jpegli XYB 色彩变换以提高压缩率。" },
+      "chroma_subsampling": { "name": "色度采样", "tooltip": "Jpegli 使用的 JPEG 色度子采样模式。" }
     }
   },
-  "WuddSaveVideo": {
-    "display_name": "Wudd 保存视频",
-    "description": "保存一个或多个 VIDEO 输入，支持 AV1/H.265、硬件编码和音频处理。",
+  "WuddV3SaveVideo": {
+    "display_name": "Wudd V3 保存视频",
+    "description": "用 ffmpeg 将一个或多个 VIDEO 输入保存到 ComfyUI output 目录。",
     "inputs": {
-      "video_1": { "name": "视频 1" },
-      "video_2": { "name": "视频 2" },
-      "video_3": { "name": "视频 3" },
-      "video_4": { "name": "视频 4" },
-      "video_5": { "name": "视频 5" },
-      "video_6": { "name": "视频 6" },
-      "video_7": { "name": "视频 7" },
-      "video_8": { "name": "视频 8" },
-      "video_9": { "name": "视频 9" },
-      "video_10": { "name": "视频 10" },
-      "video_11": { "name": "视频 11" },
-      "video_12": { "name": "视频 12" },
-      "video_13": { "name": "视频 13" },
-      "video_14": { "name": "视频 14" },
-      "video_15": { "name": "视频 15" },
-      "video_16": { "name": "视频 16" },
-      "save_mode": { "name": "保存模式" },
-      "codec": { "name": "视频编码" },
-      "encoder": { "name": "编码器" },
-      "container": { "name": "封装格式" },
-      "crf": { "name": "CRF 质量" },
-      "preset": { "name": "编码预设" },
-      "audio_mode": { "name": "音频模式" },
-      "filename_prefix": { "name": "文件名前缀" }
+      "videos": { "name": "视频", "tooltip": "动态视频输入。每个需要保存的视频添加一个端口。" },
+      "filename_prefix": { "name": "文件名前缀", "tooltip": "相对 ComfyUI output 目录的输出路径和文件名前缀。" },
+      "save_mode": { "name": "保存模式", "tooltip": "选择追加数字后缀，或覆盖同名文件。" },
+      "codec": { "name": "视频编码", "tooltip": "保存文件使用的视频编码。" },
+      "encoder": { "name": "编码器", "tooltip": "ffmpeg 编码器类型。硬件编码需要本机硬件和 ffmpeg 支持。" },
+      "container": { "name": "封装格式", "tooltip": "输出视频容器格式。" },
+      "crf": { "name": "CRF 质量", "tooltip": "恒定质量系数。数值越低通常质量越高、文件越大。" },
+      "preset": { "name": "编码预设", "tooltip": "编码速度和压缩效率预设。" },
+      "audio_mode": { "name": "音频模式", "tooltip": "复制音频、转码为 AAC，或移除音频。" }
     }
   },
-  "WuddFastForwardVideo": {
-    "display_name": "Wudd 视频快进",
-    "description": "按倍速或目标时长加速视频，可选择保留或移除音频。",
+  "WuddV3FastForwardVideo": {
+    "display_name": "Wudd V3 视频快进",
+    "description": "按速度倍率或目标时长加速 VIDEO。",
     "inputs": {
-      "video": { "name": "视频" },
-      "mode": { "name": "模式" },
-      "speed_multiplier": { "name": "速度倍率" },
-      "target_seconds": { "name": "目标秒数" },
-      "audio_mode": { "name": "音频模式" }
+      "video": { "name": "视频", "tooltip": "需要加速的 VIDEO 输入。" },
+      "mode": { "name": "模式", "tooltip": "选择直接速度倍率，或指定目标输出时长。" },
+      "speed_multiplier": { "name": "速度倍率", "tooltip": "播放速度倍率，例如 2.0 表示 2 倍速。" },
+      "target_seconds": { "name": "目标秒数", "tooltip": "目标输出时长，节点会根据源视频时长计算速度。" },
+      "audio_mode": { "name": "音频模式", "tooltip": "保留并同步加速音频，或移除音频。" }
     },
     "outputs": {
-      "0": { "name": "视频" }
+      "0": { "name": "视频", "tooltip": "加速后的视频输出。" }
     }
   },
-  "WuddConcatVideos": {
-    "display_name": "Wudd 拼接视频",
-    "description": "按输入顺序拼接多个视频，并可选择适配第一段尺寸或拉伸到第一段尺寸。",
+  "WuddV3ConcatVideos": {
+    "display_name": "Wudd V3 拼接视频",
+    "description": "按端口顺序拼接多个 VIDEO 输入，并返回一个 VIDEO。",
     "inputs": {
-      "video_1": { "name": "视频 1" },
-      "video_2": { "name": "视频 2" },
-      "video_3": { "name": "视频 3" },
-      "video_4": { "name": "视频 4" },
-      "video_5": { "name": "视频 5" },
-      "video_6": { "name": "视频 6" },
-      "video_7": { "name": "视频 7" },
-      "video_8": { "name": "视频 8" },
-      "video_9": { "name": "视频 9" },
-      "video_10": { "name": "视频 10" },
-      "video_11": { "name": "视频 11" },
-      "video_12": { "name": "视频 12" },
-      "video_13": { "name": "视频 13" },
-      "video_14": { "name": "视频 14" },
-      "video_15": { "name": "视频 15" },
-      "video_16": { "name": "视频 16" },
-      "resize_mode": { "name": "尺寸处理" },
-      "audio_mode": { "name": "音频模式" }
+      "videos": { "name": "视频", "tooltip": "动态视频输入。视频会按端口顺序拼接。" },
+      "resize_mode": { "name": "尺寸处理", "tooltip": "每段视频如何适配第一段视频的尺寸。" },
+      "audio_mode": { "name": "音频模式", "tooltip": "保留并规范化音频，或移除结果音频。" }
     },
     "outputs": {
-      "0": { "name": "视频" }
+      "0": { "name": "视频", "tooltip": "拼接后的视频输出。" }
     }
   },
-  "WuddTextSplitter": {
-    "display_name": "Wudd 文本分行",
-    "description": "按行切分多行文本，并输出指定索引的行。",
+  "WuddV3TextSplitter": {
+    "display_name": "Wudd V3 文本分行",
+    "description": "切分多行文本，并返回指定的一行。",
     "inputs": {
-      "text": { "name": "文本" },
-      "index": { "name": "行索引" },
-      "skip_empty": { "name": "跳过空行" }
+      "text": { "name": "文本", "tooltip": "要按行切分的多行文本。" },
+      "index": { "name": "行索引", "tooltip": "要返回的行索引，从 0 开始，跳过空行选项会先过滤文本。" },
+      "skip_empty": { "name": "跳过空行", "tooltip": "选择索引前先忽略空白行。" }
     },
     "outputs": {
-      "0": { "name": "文本" }
+      "0": { "name": "文本", "tooltip": "选中的行；索引超出范围时返回空字符串。" }
     }
   },
-  "WuddMultiTextSplitter": {
-    "display_name": "Wudd 多路文本分行",
-    "description": "按行切分多行文本，并输出到多个动态文本端口。",
+  "WuddV3MultiTextSplitter": {
+    "display_name": "Wudd V3 多路文本分行",
+    "description": "将多行文本拆分到最多 16 个 STRING 输出。",
     "inputs": {
-      "text": { "name": "文本" },
-      "count": { "name": "输出数量" },
-      "skip_empty": { "name": "跳过空行" }
+      "text": { "name": "文本", "tooltip": "要按行切分的多行文本。" },
+      "count": { "name": "输出数量", "tooltip": "准备使用的输出端口数量。" },
+      "skip_empty": { "name": "跳过空行", "tooltip": "分配输出端口前先忽略空白行。" }
     },
     "outputs": {
-      "0": { "name": "第 0 行" },
-      "1": { "name": "第 1 行" },
-      "2": { "name": "第 2 行" },
-      "3": { "name": "第 3 行" },
-      "4": { "name": "第 4 行" },
-      "5": { "name": "第 5 行" },
-      "6": { "name": "第 6 行" },
-      "7": { "name": "第 7 行" },
-      "8": { "name": "第 8 行" },
-      "9": { "name": "第 9 行" },
-      "10": { "name": "第 10 行" },
-      "11": { "name": "第 11 行" },
-      "12": { "name": "第 12 行" },
-      "13": { "name": "第 13 行" },
-      "14": { "name": "第 14 行" },
-      "15": { "name": "第 15 行" }
+      "0": { "name": "第 0 行", "tooltip": "拆分后的文本行；没有对应行时返回空字符串。" },
+      "1": { "name": "第 1 行", "tooltip": "拆分后的文本行；没有对应行时返回空字符串。" },
+      "2": { "name": "第 2 行", "tooltip": "拆分后的文本行；没有对应行时返回空字符串。" },
+      "3": { "name": "第 3 行", "tooltip": "拆分后的文本行；没有对应行时返回空字符串。" },
+      "4": { "name": "第 4 行", "tooltip": "拆分后的文本行；没有对应行时返回空字符串。" },
+      "5": { "name": "第 5 行", "tooltip": "拆分后的文本行；没有对应行时返回空字符串。" },
+      "6": { "name": "第 6 行", "tooltip": "拆分后的文本行；没有对应行时返回空字符串。" },
+      "7": { "name": "第 7 行", "tooltip": "拆分后的文本行；没有对应行时返回空字符串。" },
+      "8": { "name": "第 8 行", "tooltip": "拆分后的文本行；没有对应行时返回空字符串。" },
+      "9": { "name": "第 9 行", "tooltip": "拆分后的文本行；没有对应行时返回空字符串。" },
+      "10": { "name": "第 10 行", "tooltip": "拆分后的文本行；没有对应行时返回空字符串。" },
+      "11": { "name": "第 11 行", "tooltip": "拆分后的文本行；没有对应行时返回空字符串。" },
+      "12": { "name": "第 12 行", "tooltip": "拆分后的文本行；没有对应行时返回空字符串。" },
+      "13": { "name": "第 13 行", "tooltip": "拆分后的文本行；没有对应行时返回空字符串。" },
+      "14": { "name": "第 14 行", "tooltip": "拆分后的文本行；没有对应行时返回空字符串。" },
+      "15": { "name": "第 15 行", "tooltip": "拆分后的文本行；没有对应行时返回空字符串。" }
     }
   },
-  "WuddDropAlpha": {
-    "display_name": "Wudd 去除 Alpha",
-    "description": "用棋盘格或纯色替换透明区域，丢弃 Alpha，并可按内容自动裁剪。",
+  "WuddV3PromptListFromText": {
+    "display_name": "Wudd V3 提示词列表",
+    "description": "将多行文本解析为提示词列表，并输出数量。",
     "inputs": {
-      "image": { "name": "图像" },
-      "mode": { "name": "背景模式" },
-      "fill_color": { "name": "填充颜色" },
-      "tile_size": { "name": "棋盘格尺寸" },
-      "auto_crop": { "name": "自动裁剪" },
-      "padding": { "name": "裁剪边距" },
-      "mask": { "name": "遮罩" }
+      "text": { "name": "文本", "tooltip": "包含一个或多个提示词的文本。" },
+      "skip_empty": { "name": "跳过空行", "tooltip": "生成提示词列表时忽略空白行。" },
+      "strip_numbering": { "name": "去除编号", "tooltip": "移除常见前缀编号，例如 1. 或 page 2:。" }
     },
     "outputs": {
-      "0": { "name": "图像" }
+      "0": { "name": "提示词", "tooltip": "解析出的提示词字符串列表。" },
+      "1": { "name": "数量", "tooltip": "提示词列表中的条目数量。" }
     }
   },
-  "WuddImageExpand": {
-    "display_name": "Wudd 图像扩展",
-    "description": "按指定方向扩展若干个原图大小的填充块，并输出新尺寸。",
+  "WuddV3SaveText": {
+    "display_name": "Wudd V3 保存文本",
+    "description": "将 STRING 文本以 UTF-8 保存到 output、input 或 temp 下。",
     "inputs": {
-      "image": { "name": "图像" },
-      "direction": { "name": "扩展方向" },
-      "count": { "name": "扩展块数", "tooltip": "扩展几个原图大小的填充块" },
-      "mode": { "name": "填充模式" },
-      "fill_color": { "name": "填充颜色" },
-      "tile_size": { "name": "棋盘格尺寸" }
+      "text": { "name": "文本", "tooltip": "要写入文件的文本内容。" },
+      "root_dir": { "name": "根目录", "tooltip": "保存基准目录。" },
+      "file": { "name": "文件", "tooltip": "相对所选根目录的文件路径。" },
+      "append": { "name": "保存模式", "tooltip": "覆盖、追加，或仅在文件不存在时创建。" },
+      "insert": { "name": "插入到开头", "tooltip": "追加模式下将新文本插入文件开头，而不是末尾。" }
     },
     "outputs": {
-      "0": { "name": "图像" },
-      "1": { "name": "宽度" },
-      "2": { "name": "高度" }
+      "0": { "name": "路径", "tooltip": "保存后的文本文件绝对路径。" }
     }
   },
-  "WuddEdgePad": {
-    "display_name": "Wudd 边缘补图",
-    "description": "为竖向全景或连续图片扩充上下边缘，并跨相邻图片混合过渡。",
+  "WuddV3DropAlpha": {
+    "display_name": "Wudd V3 去除 Alpha",
+    "description": "用生成背景合成透明区域，并返回 RGB IMAGE。",
     "inputs": {
-      "image_1": { "name": "图像 1" },
-      "image_2": { "name": "图像 2" },
-      "image_3": { "name": "图像 3" },
-      "image_4": { "name": "图像 4" },
-      "image_5": { "name": "图像 5" },
-      "image_6": { "name": "图像 6" },
-      "image_7": { "name": "图像 7" },
-      "image_8": { "name": "图像 8" },
-      "image_9": { "name": "图像 9" },
-      "image_10": { "name": "图像 10" },
-      "image_11": { "name": "图像 11" },
-      "image_12": { "name": "图像 12" },
-      "image_13": { "name": "图像 13" },
-      "image_14": { "name": "图像 14" },
-      "image_15": { "name": "图像 15" },
-      "image_16": { "name": "图像 16" },
-      "pad_px": { "name": "补边像素" },
-      "blend_pct": { "name": "融合比例", "tooltip": "补边与原图衔接带占图高的百分比，两侧各使用此值" },
-      "pad_sigma": { "name": "补边模糊强度", "tooltip": "跨图混合的高斯模糊强度，值越大色带越不明显" },
-      "blend_sigma": { "name": "衔接模糊强度", "tooltip": "补边与原图衔接带的额外模糊强度" },
-      "chamfer_pct": { "name": "边沿倒角比例", "tooltip": "原图上下边沿倒角深度，占图高百分比，0 表示关闭" }
+      "image": { "name": "图像", "tooltip": "可能包含 Alpha 的输入图像。" },
+      "mode": { "name": "背景模式", "tooltip": "透明区域使用的背景填充模式。" },
+      "tile_size": { "name": "棋盘格尺寸", "tooltip": "棋盘格单格像素大小。" },
+      "fill_color": { "name": "填充颜色", "tooltip": "十六进制纯色背景。" },
+      "auto_crop": { "name": "自动裁剪", "tooltip": "合成后裁剪到非透明内容范围。" },
+      "padding": { "name": "裁剪边距", "tooltip": "自动裁剪时额外保留的像素边距。" },
+      "mask": { "name": "遮罩", "tooltip": "可选遮罩，值为 1 的区域会被视为透明并替换。" }
     },
     "outputs": {
-      "0": { "name": "图像 1" },
-      "1": { "name": "图像 2" },
-      "2": { "name": "图像 3" },
-      "3": { "name": "图像 4" },
-      "4": { "name": "图像 5" },
-      "5": { "name": "图像 6" },
-      "6": { "name": "图像 7" },
-      "7": { "name": "图像 8" },
-      "8": { "name": "图像 9" },
-      "9": { "name": "图像 10" },
-      "10": { "name": "图像 11" },
-      "11": { "name": "图像 12" },
-      "12": { "name": "图像 13" },
-      "13": { "name": "图像 14" },
-      "14": { "name": "图像 15" },
-      "15": { "name": "图像 16" }
+      "0": { "name": "图像", "tooltip": "去除 Alpha 后的 RGB 图像。" }
     }
   },
-  "WuddImageListImporter": {
-    "display_name": "Wudd 图片列表导入",
-    "description": "从 ComfyUI input 目录中按文件选择或文件夹扫描批量导入图片。",
+  "WuddV3ImageExpand": {
+    "display_name": "Wudd V3 图像扩展",
+    "description": "按一个方向用整图大小的块扩展图像。",
     "inputs": {
-      "image_count": { "name": "图片数量" },
-      "mode": { "name": "导入模式" },
-      "folder_path": { "name": "文件夹路径", "tooltip": "文件夹路径，支持绝对路径或相对 ComfyUI input/ 的路径" },
-      "image_1": { "name": "图片 1" },
-      "image_2": { "name": "图片 2" },
-      "image_3": { "name": "图片 3" },
-      "image_4": { "name": "图片 4" },
-      "image_5": { "name": "图片 5" },
-      "image_6": { "name": "图片 6" },
-      "image_7": { "name": "图片 7" },
-      "image_8": { "name": "图片 8" },
-      "image_9": { "name": "图片 9" },
-      "image_10": { "name": "图片 10" },
-      "image_11": { "name": "图片 11" },
-      "image_12": { "name": "图片 12" },
-      "image_13": { "name": "图片 13" },
-      "image_14": { "name": "图片 14" },
-      "image_15": { "name": "图片 15" },
-      "image_16": { "name": "图片 16" },
-      "image_17": { "name": "图片 17" },
-      "image_18": { "name": "图片 18" },
-      "image_19": { "name": "图片 19" },
-      "image_20": { "name": "图片 20" },
-      "image_21": { "name": "图片 21" },
-      "image_22": { "name": "图片 22" },
-      "image_23": { "name": "图片 23" },
-      "image_24": { "name": "图片 24" },
-      "image_25": { "name": "图片 25" },
-      "image_26": { "name": "图片 26" },
-      "image_27": { "name": "图片 27" },
-      "image_28": { "name": "图片 28" },
-      "image_29": { "name": "图片 29" },
-      "image_30": { "name": "图片 30" },
-      "image_31": { "name": "图片 31" },
-      "image_32": { "name": "图片 32" },
-      "image_33": { "name": "图片 33" },
-      "image_34": { "name": "图片 34" },
-      "image_35": { "name": "图片 35" },
-      "image_36": { "name": "图片 36" },
-      "image_37": { "name": "图片 37" },
-      "image_38": { "name": "图片 38" },
-      "image_39": { "name": "图片 39" },
-      "image_40": { "name": "图片 40" },
-      "image_41": { "name": "图片 41" },
-      "image_42": { "name": "图片 42" },
-      "image_43": { "name": "图片 43" },
-      "image_44": { "name": "图片 44" },
-      "image_45": { "name": "图片 45" },
-      "image_46": { "name": "图片 46" },
-      "image_47": { "name": "图片 47" },
-      "image_48": { "name": "图片 48" },
-      "image_49": { "name": "图片 49" },
-      "image_50": { "name": "图片 50" }
+      "image": { "name": "图像", "tooltip": "要扩展的输入图像。" },
+      "direction": { "name": "扩展方向", "tooltip": "新增区域所在方向。" },
+      "count": { "name": "扩展块数", "tooltip": "要增加几个原图大小的区域。" },
+      "mode": { "name": "填充模式", "tooltip": "新增区域的填充方式。" },
+      "tile_size": { "name": "棋盘格尺寸", "tooltip": "棋盘格单格像素大小。" },
+      "fill_color": { "name": "填充颜色", "tooltip": "十六进制纯色填充颜色。" }
     },
     "outputs": {
-      "0": { "name": "图片 1" },
-      "1": { "name": "图片 2" },
-      "2": { "name": "图片 3" },
-      "3": { "name": "图片 4" },
-      "4": { "name": "图片 5" },
-      "5": { "name": "图片 6" },
-      "6": { "name": "图片 7" },
-      "7": { "name": "图片 8" },
-      "8": { "name": "图片 9" },
-      "9": { "name": "图片 10" },
-      "10": { "name": "图片 11" },
-      "11": { "name": "图片 12" },
-      "12": { "name": "图片 13" },
-      "13": { "name": "图片 14" },
-      "14": { "name": "图片 15" },
-      "15": { "name": "图片 16" },
-      "16": { "name": "图片 17" },
-      "17": { "name": "图片 18" },
-      "18": { "name": "图片 19" },
-      "19": { "name": "图片 20" },
-      "20": { "name": "图片 21" },
-      "21": { "name": "图片 22" },
-      "22": { "name": "图片 23" },
-      "23": { "name": "图片 24" },
-      "24": { "name": "图片 25" },
-      "25": { "name": "图片 26" },
-      "26": { "name": "图片 27" },
-      "27": { "name": "图片 28" },
-      "28": { "name": "图片 29" },
-      "29": { "name": "图片 30" },
-      "30": { "name": "图片 31" },
-      "31": { "name": "图片 32" },
-      "32": { "name": "图片 33" },
-      "33": { "name": "图片 34" },
-      "34": { "name": "图片 35" },
-      "35": { "name": "图片 36" },
-      "36": { "name": "图片 37" },
-      "37": { "name": "图片 38" },
-      "38": { "name": "图片 39" },
-      "39": { "name": "图片 40" },
-      "40": { "name": "图片 41" },
-      "41": { "name": "图片 42" },
-      "42": { "name": "图片 43" },
-      "43": { "name": "图片 44" },
-      "44": { "name": "图片 45" },
-      "45": { "name": "图片 46" },
-      "46": { "name": "图片 47" },
-      "47": { "name": "图片 48" },
-      "48": { "name": "图片 49" },
-      "49": { "name": "图片 50" }
+      "0": { "name": "图像", "tooltip": "扩展后的图像。" },
+      "1": { "name": "宽度", "tooltip": "扩展后图像宽度，单位像素。" },
+      "2": { "name": "高度", "tooltip": "扩展后图像高度，单位像素。" }
     }
   },
-  "WuddImageStitch": {
-    "display_name": "Wudd 图像拼接",
-    "description": "按指定方向线性拼接多张图像，可设置间距并自动适配第一张图的基准尺寸。",
+  "WuddV3EdgePad": {
+    "display_name": "Wudd V3 边缘补图",
+    "description": "扩展竖向图像边缘，并在相邻图像之间做边缘混合。",
     "inputs": {
-      "image_1": { "name": "图像 1" },
-      "image_2": { "name": "图像 2" },
-      "image_3": { "name": "图像 3" },
-      "image_4": { "name": "图像 4" },
-      "image_5": { "name": "图像 5" },
-      "image_6": { "name": "图像 6" },
-      "image_7": { "name": "图像 7" },
-      "image_8": { "name": "图像 8" },
-      "image_9": { "name": "图像 9" },
-      "image_10": { "name": "图像 10" },
-      "image_11": { "name": "图像 11" },
-      "image_12": { "name": "图像 12" },
-      "image_13": { "name": "图像 13" },
-      "image_14": { "name": "图像 14" },
-      "image_15": { "name": "图像 15" },
-      "image_16": { "name": "图像 16" },
-      "direction": { "name": "拼接方向" },
-      "gap": { "name": "间距" },
-      "input_count": { "name": "输入数量" }
+      "images": { "name": "图像", "tooltip": "动态图像输入，按端口顺序处理。" },
+      "pad_px": { "name": "补边像素", "tooltip": "添加到上下边缘的像素数。" },
+      "blend_pct": { "name": "融合比例", "tooltip": "补边和原图过渡带占图像高度的百分比。" },
+      "pad_sigma": { "name": "补边模糊强度", "tooltip": "跨图边缘补图使用的高斯模糊强度。" },
+      "blend_sigma": { "name": "衔接模糊强度", "tooltip": "原图到补边过渡区域的高斯模糊强度。" },
+      "chamfer_pct": { "name": "边沿倒角比例", "tooltip": "边缘倒角深度百分比，0 表示关闭。" }
     },
     "outputs": {
-      "0": { "name": "图像" }
+      "0": { "name": "图像 1", "tooltip": "对应输入端口的补边图像。" },
+      "1": { "name": "图像 2", "tooltip": "对应输入端口的补边图像。" },
+      "2": { "name": "图像 3", "tooltip": "对应输入端口的补边图像。" },
+      "3": { "name": "图像 4", "tooltip": "对应输入端口的补边图像。" },
+      "4": { "name": "图像 5", "tooltip": "对应输入端口的补边图像。" },
+      "5": { "name": "图像 6", "tooltip": "对应输入端口的补边图像。" },
+      "6": { "name": "图像 7", "tooltip": "对应输入端口的补边图像。" },
+      "7": { "name": "图像 8", "tooltip": "对应输入端口的补边图像。" },
+      "8": { "name": "图像 9", "tooltip": "对应输入端口的补边图像。" },
+      "9": { "name": "图像 10", "tooltip": "对应输入端口的补边图像。" },
+      "10": { "name": "图像 11", "tooltip": "对应输入端口的补边图像。" },
+      "11": { "name": "图像 12", "tooltip": "对应输入端口的补边图像。" },
+      "12": { "name": "图像 13", "tooltip": "对应输入端口的补边图像。" },
+      "13": { "name": "图像 14", "tooltip": "对应输入端口的补边图像。" },
+      "14": { "name": "图像 15", "tooltip": "对应输入端口的补边图像。" },
+      "15": { "name": "图像 16", "tooltip": "对应输入端口的补边图像。" }
     }
   },
-  "WuddPathJoiner": {
-    "display_name": "Wudd 路径拼接",
-    "description": "使用 / 连接最多 5 段路径片段。",
+  "WuddV3ImageListImporter": {
+    "display_name": "Wudd V3 图片列表导入",
+    "description": "从 ComfyUI input 文件或指定文件夹中导入多张图片。",
     "inputs": {
-      "count": { "name": "片段数量" },
-      "segment_1": { "name": "片段 1" },
-      "segment_2": { "name": "片段 2" },
-      "segment_3": { "name": "片段 3" },
-      "segment_4": { "name": "片段 4" },
-      "segment_5": { "name": "片段 5" }
+      "mode": { "name": "导入模式", "tooltip": "选择单独文件选择模式或文件夹扫描模式。" },
+      "image_count": { "name": "图片数量", "tooltip": "要加载的图片输出数量。" },
+      "folder_path": { "name": "文件夹路径", "tooltip": "文件夹路径，可为绝对路径或相对 ComfyUI input 目录。" }
     },
     "outputs": {
-      "0": { "name": "路径" }
+      "0": { "name": "图片 1", "tooltip": "对应序号的导入图片。" },
+      "1": { "name": "图片 2", "tooltip": "对应序号的导入图片。" },
+      "2": { "name": "图片 3", "tooltip": "对应序号的导入图片。" },
+      "3": { "name": "图片 4", "tooltip": "对应序号的导入图片。" },
+      "4": { "name": "图片 5", "tooltip": "对应序号的导入图片。" },
+      "5": { "name": "图片 6", "tooltip": "对应序号的导入图片。" },
+      "6": { "name": "图片 7", "tooltip": "对应序号的导入图片。" },
+      "7": { "name": "图片 8", "tooltip": "对应序号的导入图片。" },
+      "8": { "name": "图片 9", "tooltip": "对应序号的导入图片。" },
+      "9": { "name": "图片 10", "tooltip": "对应序号的导入图片。" },
+      "10": { "name": "图片 11", "tooltip": "对应序号的导入图片。" },
+      "11": { "name": "图片 12", "tooltip": "对应序号的导入图片。" },
+      "12": { "name": "图片 13", "tooltip": "对应序号的导入图片。" },
+      "13": { "name": "图片 14", "tooltip": "对应序号的导入图片。" },
+      "14": { "name": "图片 15", "tooltip": "对应序号的导入图片。" },
+      "15": { "name": "图片 16", "tooltip": "对应序号的导入图片。" },
+      "16": { "name": "图片 17", "tooltip": "对应序号的导入图片。" },
+      "17": { "name": "图片 18", "tooltip": "对应序号的导入图片。" },
+      "18": { "name": "图片 19", "tooltip": "对应序号的导入图片。" },
+      "19": { "name": "图片 20", "tooltip": "对应序号的导入图片。" },
+      "20": { "name": "图片 21", "tooltip": "对应序号的导入图片。" },
+      "21": { "name": "图片 22", "tooltip": "对应序号的导入图片。" },
+      "22": { "name": "图片 23", "tooltip": "对应序号的导入图片。" },
+      "23": { "name": "图片 24", "tooltip": "对应序号的导入图片。" },
+      "24": { "name": "图片 25", "tooltip": "对应序号的导入图片。" },
+      "25": { "name": "图片 26", "tooltip": "对应序号的导入图片。" },
+      "26": { "name": "图片 27", "tooltip": "对应序号的导入图片。" },
+      "27": { "name": "图片 28", "tooltip": "对应序号的导入图片。" },
+      "28": { "name": "图片 29", "tooltip": "对应序号的导入图片。" },
+      "29": { "name": "图片 30", "tooltip": "对应序号的导入图片。" },
+      "30": { "name": "图片 31", "tooltip": "对应序号的导入图片。" },
+      "31": { "name": "图片 32", "tooltip": "对应序号的导入图片。" },
+      "32": { "name": "图片 33", "tooltip": "对应序号的导入图片。" },
+      "33": { "name": "图片 34", "tooltip": "对应序号的导入图片。" },
+      "34": { "name": "图片 35", "tooltip": "对应序号的导入图片。" },
+      "35": { "name": "图片 36", "tooltip": "对应序号的导入图片。" },
+      "36": { "name": "图片 37", "tooltip": "对应序号的导入图片。" },
+      "37": { "name": "图片 38", "tooltip": "对应序号的导入图片。" },
+      "38": { "name": "图片 39", "tooltip": "对应序号的导入图片。" },
+      "39": { "name": "图片 40", "tooltip": "对应序号的导入图片。" },
+      "40": { "name": "图片 41", "tooltip": "对应序号的导入图片。" },
+      "41": { "name": "图片 42", "tooltip": "对应序号的导入图片。" },
+      "42": { "name": "图片 43", "tooltip": "对应序号的导入图片。" },
+      "43": { "name": "图片 44", "tooltip": "对应序号的导入图片。" },
+      "44": { "name": "图片 45", "tooltip": "对应序号的导入图片。" },
+      "45": { "name": "图片 46", "tooltip": "对应序号的导入图片。" },
+      "46": { "name": "图片 47", "tooltip": "对应序号的导入图片。" },
+      "47": { "name": "图片 48", "tooltip": "对应序号的导入图片。" },
+      "48": { "name": "图片 49", "tooltip": "对应序号的导入图片。" },
+      "49": { "name": "图片 50", "tooltip": "对应序号的导入图片。" }
     }
   },
-  "WuddGroupSwitch": {
-    "display_name": "Wudd 组开关",
-    "description": "自动列出画布上的分组，并用一个节点开启或关闭多个组内节点运行。",
+  "WuddV3ImageStitch": {
+    "display_name": "Wudd V3 图像拼接",
+    "description": "按一个方向线性拼接多张图像。",
     "inputs": {
-      "enabled": { "name": "全部启用", "tooltip": "总开关。组名留空时会同时设置节点里列出的所有画布组；填写组名时只控制该组。" },
-      "group_name": { "name": "单组目标", "tooltip": "留空时显示并控制所有画布组；填 self/current/auto 时控制此节点所在组；也可填写精确组标题。" },
-      "off_mode": { "name": "关闭方式", "tooltip": "mute=设为 Never，不运行；bypass=设为 Bypass。" }
+      "images": { "name": "图像", "tooltip": "动态图像输入，按端口顺序拼接。" },
+      "direction": { "name": "拼接方向", "tooltip": "后续图像相对前一张图像放置的方向。" },
+      "gap": { "name": "间距", "tooltip": "图像之间插入的像素间距。" }
     },
     "outputs": {
-      "0": { "name": "启用" },
-      "1": { "name": "组名" }
+      "0": { "name": "图像", "tooltip": "拼接后的图像。" }
     }
   },
-  "WuddVideoAudioExtractor": {
-    "display_name": "Wudd 从视频提取音频",
-    "description": "从 VIDEO 输入中提取 AUDIO，并输出采样率和时长。",
+  "WuddV3PathJoiner": {
+    "display_name": "Wudd V3 路径拼接",
+    "description": "使用正斜杠连接最多 5 段路径片段。",
     "inputs": {
-      "video": { "name": "视频" },
-      "audio_stream_index": { "name": "音频流索引" }
+      "count": { "name": "片段数量", "tooltip": "要参与拼接的路径片段数量。" },
+      "segment_1": { "name": "片段 1", "tooltip": "路径片段 1，空白片段会被忽略。" },
+      "segment_2": { "name": "片段 2", "tooltip": "路径片段 2，空白片段会被忽略。" },
+      "segment_3": { "name": "片段 3", "tooltip": "路径片段 3，空白片段会被忽略。" },
+      "segment_4": { "name": "片段 4", "tooltip": "路径片段 4，空白片段会被忽略。" },
+      "segment_5": { "name": "片段 5", "tooltip": "路径片段 5，空白片段会被忽略。" }
     },
     "outputs": {
-      "0": { "name": "音频" },
-      "1": { "name": "采样率" },
-      "2": { "name": "时长秒数" }
+      "0": { "name": "路径", "tooltip": "使用 / 分隔的拼接路径字符串。" }
     }
   },
-  "WuddReplaceVideoAudio": {
-    "display_name": "Wudd 替换视频音频",
-    "description": "用 AUDIO 输入替换 VIDEO 中的音频轨，并保持视频时长。",
+  "WuddV3VideoAudioExtractor": {
+    "display_name": "Wudd V3 从视频提取音频",
+    "description": "从 VIDEO 输入中提取 AUDIO、采样率和时长。",
     "inputs": {
-      "video": { "name": "视频" },
-      "audio": { "name": "音频" },
-      "output_format": { "name": "输出格式" },
-      "audio_bitrate": { "name": "音频码率" },
-      "end_mode": { "name": "结束模式" }
+      "video": { "name": "视频", "tooltip": "包含音频流的 VIDEO 输入。" },
+      "audio_stream_index": { "name": "音频流索引", "tooltip": "要提取的音频流索引，从 0 开始。" }
     },
     "outputs": {
-      "0": { "name": "视频" }
+      "0": { "name": "音频", "tooltip": "提取出的 AUDIO 对象。" },
+      "1": { "name": "采样率", "tooltip": "音频采样率，单位 Hz。" },
+      "2": { "name": "时长秒数", "tooltip": "提取音频的时长，单位秒。" }
     }
   },
-  "WuddOpenRouterGPTText": {
-    "display_name": "Wudd OpenRouter GPT 文本",
+  "WuddV3ReplaceVideoAudio": {
+    "display_name": "Wudd V3 替换视频音频",
+    "description": "用 AUDIO 输入替换 VIDEO 的音频轨。",
+    "inputs": {
+      "video": { "name": "视频", "tooltip": "需要替换音频轨的视频。" },
+      "audio": { "name": "音频", "tooltip": "用于替换的 AUDIO 输入。" },
+      "output_format": { "name": "输出格式", "tooltip": "临时输出视频的容器格式。" },
+      "audio_bitrate": { "name": "音频码率", "tooltip": "替换音频编码为 AAC 时使用的码率。" },
+      "end_mode": { "name": "结束模式", "tooltip": "视频和音频时长不一致时的处理方式。" }
+    },
+    "outputs": {
+      "0": { "name": "视频", "tooltip": "替换音频轨后的视频。" }
+    }
+  },
+  "WuddV3OpenRouterGPTText": {
+    "display_name": "Wudd V3 OpenRouter GPT 文本",
     "description": "通过 OpenRouter 调用 GPT 文本或多模态模型，返回文本、推理内容和响应 ID。",
     "inputs": {
-      "prompt": { "name": "提示词" },
-      "api_key": { "name": "API 密钥" },
-      "model": { "name": "模型" },
-      "max_tokens": { "name": "最大令牌数" },
-      "reasoning_effort": { "name": "推理强度" },
-      "include_reasoning": { "name": "包含推理内容" },
-      "response_format": { "name": "响应格式" },
-      "seed": { "name": "随机种子" },
-      "base_url": { "name": "API 基础 URL" },
-      "timeout_seconds": { "name": "超时时间（秒）" },
-      "verify_ssl": { "name": "验证 SSL" },
-      "system_prompt": { "name": "系统提示词" },
-      "extra_body_json": { "name": "额外请求 JSON" },
-      "image_1": { "name": "参考图像 1" },
-      "image_2": { "name": "参考图像 2" },
-      "image_3": { "name": "参考图像 3" },
-      "image_4": { "name": "参考图像 4" },
-      "image_5": { "name": "参考图像 5" },
-      "image_6": { "name": "参考图像 6" },
-      "image_7": { "name": "参考图像 7" },
-      "image_8": { "name": "参考图像 8" },
-      "image_9": { "name": "参考图像 9" },
-      "image_10": { "name": "参考图像 10" },
-      "image_11": { "name": "参考图像 11" },
-      "image_12": { "name": "参考图像 12" },
-      "image_13": { "name": "参考图像 13" },
-      "image_14": { "name": "参考图像 14" },
-      "image_15": { "name": "参考图像 15" },
-      "image_16": { "name": "参考图像 16" }
+      "prompt": { "name": "提示词", "tooltip": "发送给模型的用户提示词。" },
+      "api_key": { "name": "API 密钥", "tooltip": "OpenRouter API 密钥。" },
+      "model": { "name": "模型", "tooltip": "OpenRouter 模型标识。" },
+      "max_tokens": { "name": "最大令牌数", "tooltip": "请求的最大输出令牌数。" },
+      "reasoning_effort": { "name": "推理强度", "tooltip": "模型支持时请求的推理强度。" },
+      "include_reasoning": { "name": "包含推理内容", "tooltip": "模型支持时请求返回推理内容。" },
+      "response_format": { "name": "响应格式", "tooltip": "文本或 JSON 风格的响应格式提示。" },
+      "seed": { "name": "随机种子", "tooltip": "模型支持时使用的确定性种子。" },
+      "base_url": { "name": "API 基础 URL", "tooltip": "OpenRouter 兼容 API 基础地址。" },
+      "timeout_seconds": { "name": "超时时间（秒）", "tooltip": "单次 API 请求的最长等待时间。" },
+      "verify_ssl": { "name": "验证 SSL", "tooltip": "是否验证 HTTPS 证书。" },
+      "system_prompt": { "name": "系统提示词", "tooltip": "在用户提示词前发送的可选系统消息。" },
+      "extra_body_json": { "name": "额外请求 JSON", "tooltip": "合并到 API 请求体中的可选 JSON 对象。" },
+      "images": { "name": "参考图像", "tooltip": "随提示词一起发送的可选参考图像。" }
     },
     "outputs": {
-      "0": { "name": "文本" },
-      "1": { "name": "推理" },
-      "2": { "name": "响应 ID" }
+      "0": { "name": "文本", "tooltip": "模型返回的主要文本。" },
+      "1": { "name": "推理", "tooltip": "请求且可用时返回的推理内容。" },
+      "2": { "name": "响应 ID", "tooltip": "API 返回的响应标识。" }
     }
   },
-  "WuddOpenRouterClaudeText": {
-    "display_name": "Wudd OpenRouter Claude 文本",
+  "WuddV3OpenRouterClaudeText": {
+    "display_name": "Wudd V3 OpenRouter Claude 文本",
     "description": "通过 OpenRouter 调用 Claude 文本模型，返回文本、推理内容和响应 ID。",
     "inputs": {
-      "prompt": { "name": "提示词" },
-      "api_key": { "name": "API 密钥" },
-      "model": { "name": "模型" },
-      "max_tokens": { "name": "最大令牌数" },
-      "temperature": { "name": "温度" },
-      "top_p": { "name": "Top P" },
-      "top_k": { "name": "Top K" },
-      "verbosity": { "name": "详细程度" },
-      "reasoning_effort": { "name": "推理强度" },
-      "include_reasoning": { "name": "包含推理内容" },
-      "base_url": { "name": "API 基础 URL" },
-      "timeout_seconds": { "name": "超时时间（秒）" },
-      "verify_ssl": { "name": "验证 SSL" },
-      "system_prompt": { "name": "系统提示词" },
-      "extra_body_json": { "name": "额外请求 JSON" },
-      "stop_sequences": { "name": "停止序列" }
+      "prompt": { "name": "提示词", "tooltip": "发送给模型的用户提示词。" },
+      "api_key": { "name": "API 密钥", "tooltip": "OpenRouter API 密钥。" },
+      "model": { "name": "模型", "tooltip": "OpenRouter 模型标识。" },
+      "max_tokens": { "name": "最大令牌数", "tooltip": "请求的最大输出令牌数。" },
+      "temperature": { "name": "温度", "tooltip": "采样温度。" },
+      "top_p": { "name": "Top P", "tooltip": "核心采样参数。" },
+      "top_k": { "name": "Top K", "tooltip": "Top-k 采样参数，0 表示使用服务端默认。" },
+      "verbosity": { "name": "详细程度", "tooltip": "服务商支持时的详细程度提示。" },
+      "reasoning_effort": { "name": "推理强度", "tooltip": "模型支持时请求的推理强度。" },
+      "include_reasoning": { "name": "包含推理内容", "tooltip": "模型支持时请求返回推理内容。" },
+      "base_url": { "name": "API 基础 URL", "tooltip": "OpenRouter 兼容 API 基础地址。" },
+      "timeout_seconds": { "name": "超时时间（秒）", "tooltip": "单次 API 请求的最长等待时间。" },
+      "verify_ssl": { "name": "验证 SSL", "tooltip": "是否验证 HTTPS 证书。" },
+      "system_prompt": { "name": "系统提示词", "tooltip": "在用户提示词前发送的可选系统消息。" },
+      "extra_body_json": { "name": "额外请求 JSON", "tooltip": "合并到 API 请求体中的可选 JSON 对象。" },
+      "stop_sequences": { "name": "停止序列", "tooltip": "可选停止序列，每行一个。" }
     },
     "outputs": {
-      "0": { "name": "文本" },
-      "1": { "name": "推理" },
-      "2": { "name": "响应 ID" }
+      "0": { "name": "文本", "tooltip": "模型返回的主要文本。" },
+      "1": { "name": "推理", "tooltip": "请求且可用时返回的推理内容。" },
+      "2": { "name": "响应 ID", "tooltip": "API 返回的响应标识。" }
     }
   },
-  "WuddOpenRouterGeminiText": {
-    "display_name": "Wudd OpenRouter Gemini 文本",
+  "WuddV3OpenRouterGeminiText": {
+    "display_name": "Wudd V3 OpenRouter Gemini 文本",
     "description": "通过 OpenRouter 调用 Gemini 文本或多模态模型，返回文本、推理内容和响应 ID。",
     "inputs": {
-      "prompt": { "name": "提示词" },
-      "api_key": { "name": "API 密钥" },
-      "model": { "name": "模型" },
-      "max_tokens": { "name": "最大令牌数" },
-      "temperature": { "name": "温度" },
-      "top_p": { "name": "Top P" },
-      "reasoning_effort": { "name": "推理强度" },
-      "include_reasoning": { "name": "包含推理内容" },
-      "response_format": { "name": "响应格式" },
-      "seed": { "name": "随机种子" },
-      "base_url": { "name": "API 基础 URL" },
-      "timeout_seconds": { "name": "超时时间（秒）" },
-      "verify_ssl": { "name": "验证 SSL" },
-      "system_prompt": { "name": "系统提示词" },
-      "extra_body_json": { "name": "额外请求 JSON" },
-      "stop_sequences": { "name": "停止序列" },
-      "image_1": { "name": "参考图像 1" },
-      "image_2": { "name": "参考图像 2" },
-      "image_3": { "name": "参考图像 3" },
-      "image_4": { "name": "参考图像 4" },
-      "image_5": { "name": "参考图像 5" },
-      "image_6": { "name": "参考图像 6" },
-      "image_7": { "name": "参考图像 7" },
-      "image_8": { "name": "参考图像 8" },
-      "image_9": { "name": "参考图像 9" },
-      "image_10": { "name": "参考图像 10" },
-      "image_11": { "name": "参考图像 11" },
-      "image_12": { "name": "参考图像 12" },
-      "image_13": { "name": "参考图像 13" },
-      "image_14": { "name": "参考图像 14" },
-      "image_15": { "name": "参考图像 15" },
-      "image_16": { "name": "参考图像 16" }
+      "prompt": { "name": "提示词", "tooltip": "发送给模型的用户提示词。" },
+      "api_key": { "name": "API 密钥", "tooltip": "OpenRouter API 密钥。" },
+      "model": { "name": "模型", "tooltip": "OpenRouter 模型标识。" },
+      "max_tokens": { "name": "最大令牌数", "tooltip": "请求的最大输出令牌数。" },
+      "temperature": { "name": "温度", "tooltip": "采样温度。" },
+      "top_p": { "name": "Top P", "tooltip": "核心采样参数。" },
+      "reasoning_effort": { "name": "推理强度", "tooltip": "模型支持时请求的推理强度。" },
+      "include_reasoning": { "name": "包含推理内容", "tooltip": "模型支持时请求返回推理内容。" },
+      "response_format": { "name": "响应格式", "tooltip": "文本或 JSON 风格的响应格式提示。" },
+      "seed": { "name": "随机种子", "tooltip": "模型支持时使用的确定性种子。" },
+      "base_url": { "name": "API 基础 URL", "tooltip": "OpenRouter 兼容 API 基础地址。" },
+      "timeout_seconds": { "name": "超时时间（秒）", "tooltip": "单次 API 请求的最长等待时间。" },
+      "verify_ssl": { "name": "验证 SSL", "tooltip": "是否验证 HTTPS 证书。" },
+      "system_prompt": { "name": "系统提示词", "tooltip": "在用户提示词前发送的可选系统消息。" },
+      "extra_body_json": { "name": "额外请求 JSON", "tooltip": "合并到 API 请求体中的可选 JSON 对象。" },
+      "stop_sequences": { "name": "停止序列", "tooltip": "可选停止序列，每行一个。" },
+      "images": { "name": "参考图像", "tooltip": "随提示词一起发送的可选参考图像。" }
     },
     "outputs": {
-      "0": { "name": "文本" },
-      "1": { "name": "推理" },
-      "2": { "name": "响应 ID" }
+      "0": { "name": "文本", "tooltip": "模型返回的主要文本。" },
+      "1": { "name": "推理", "tooltip": "请求且可用时返回的推理内容。" },
+      "2": { "name": "响应 ID", "tooltip": "API 返回的响应标识。" }
     }
   },
-  "WuddOpenRouterGPTImage": {
-    "display_name": "Wudd OpenRouter GPT 图像",
+  "WuddV3OpenRouterGPTImage": {
+    "display_name": "Wudd V3 OpenRouter GPT 图像",
     "description": "通过 OpenRouter 调用 GPT 图像模型，返回生成图像、文本和响应 ID。",
     "inputs": {
-      "prompt": { "name": "提示词" },
-      "api_key": { "name": "API 密钥" },
-      "model": { "name": "模型" },
-      "response_modalities": { "name": "响应模态" },
-      "aspect_ratio": { "name": "宽高比" },
-      "image_size": { "name": "图像尺寸" },
-      "max_tokens": { "name": "最大令牌数" },
-      "reasoning_effort": { "name": "推理强度" },
-      "seed": { "name": "随机种子" },
-      "base_url": { "name": "API 基础 URL" },
-      "timeout_seconds": { "name": "超时时间（秒）" },
-      "verify_ssl": { "name": "验证 SSL" },
-      "system_prompt": { "name": "系统提示词" },
-      "extra_body_json": { "name": "额外请求 JSON" },
-      "image_1": { "name": "参考图像 1" },
-      "image_2": { "name": "参考图像 2" },
-      "image_3": { "name": "参考图像 3" },
-      "image_4": { "name": "参考图像 4" },
-      "image_5": { "name": "参考图像 5" },
-      "image_6": { "name": "参考图像 6" },
-      "image_7": { "name": "参考图像 7" },
-      "image_8": { "name": "参考图像 8" },
-      "image_9": { "name": "参考图像 9" },
-      "image_10": { "name": "参考图像 10" },
-      "image_11": { "name": "参考图像 11" },
-      "image_12": { "name": "参考图像 12" },
-      "image_13": { "name": "参考图像 13" },
-      "image_14": { "name": "参考图像 14" },
-      "image_15": { "name": "参考图像 15" },
-      "image_16": { "name": "参考图像 16" }
+      "prompt": { "name": "提示词", "tooltip": "图像生成或编辑提示词。" },
+      "api_key": { "name": "API 密钥", "tooltip": "OpenRouter API 密钥。" },
+      "model": { "name": "模型", "tooltip": "OpenRouter 模型标识。" },
+      "response_modalities": { "name": "响应模态", "tooltip": "向模型请求的响应模态。" },
+      "aspect_ratio": { "name": "宽高比", "tooltip": "请求的输出宽高比。" },
+      "image_size": { "name": "图像尺寸", "tooltip": "请求的服务商图像尺寸。" },
+      "max_tokens": { "name": "最大令牌数", "tooltip": "附带文本的最大输出令牌数。" },
+      "reasoning_effort": { "name": "推理强度", "tooltip": "模型支持时请求的推理强度。" },
+      "seed": { "name": "随机种子", "tooltip": "模型支持时使用的确定性种子。" },
+      "base_url": { "name": "API 基础 URL", "tooltip": "OpenRouter 兼容 API 基础地址。" },
+      "timeout_seconds": { "name": "超时时间（秒）", "tooltip": "单次 API 请求的最长等待时间。" },
+      "verify_ssl": { "name": "验证 SSL", "tooltip": "是否验证 HTTPS 证书。" },
+      "system_prompt": { "name": "系统提示词", "tooltip": "在用户提示词前发送的可选系统消息。" },
+      "extra_body_json": { "name": "额外请求 JSON", "tooltip": "合并到 API 请求体中的可选 JSON 对象。" },
+      "images": { "name": "参考图像", "tooltip": "用于图像生成或编辑的可选参考图像。" }
     },
     "outputs": {
-      "0": { "name": "图像" },
-      "1": { "name": "文本" },
-      "2": { "name": "响应 ID" }
+      "0": { "name": "图像", "tooltip": "生成的图像批次；无图时可能返回占位图。" },
+      "1": { "name": "文本", "tooltip": "图像响应附带的文本。" },
+      "2": { "name": "响应 ID", "tooltip": "API 返回的响应标识。" }
     }
   },
-  "WuddOpenRouterGeminiImage": {
-    "display_name": "Wudd OpenRouter Gemini 图像",
+  "WuddV3OpenRouterGeminiImage": {
+    "display_name": "Wudd V3 OpenRouter Gemini 图像",
     "description": "通过 OpenRouter 调用 Gemini 图像模型，返回生成图像、文本和响应 ID。",
     "inputs": {
-      "prompt": { "name": "提示词" },
-      "api_key": { "name": "API 密钥" },
-      "model": { "name": "模型" },
-      "response_modalities": { "name": "响应模态" },
-      "aspect_ratio": { "name": "宽高比" },
-      "image_size": { "name": "图像尺寸" },
-      "max_tokens": { "name": "最大令牌数" },
-      "temperature": { "name": "温度" },
-      "top_p": { "name": "Top P" },
-      "reasoning_effort": { "name": "推理强度" },
-      "seed": { "name": "随机种子" },
-      "base_url": { "name": "API 基础 URL" },
-      "timeout_seconds": { "name": "超时时间（秒）" },
-      "verify_ssl": { "name": "验证 SSL" },
-      "system_prompt": { "name": "系统提示词" },
-      "extra_body_json": { "name": "额外请求 JSON" },
-      "image_1": { "name": "参考图像 1" },
-      "image_2": { "name": "参考图像 2" },
-      "image_3": { "name": "参考图像 3" },
-      "image_4": { "name": "参考图像 4" },
-      "image_5": { "name": "参考图像 5" },
-      "image_6": { "name": "参考图像 6" },
-      "image_7": { "name": "参考图像 7" },
-      "image_8": { "name": "参考图像 8" },
-      "image_9": { "name": "参考图像 9" },
-      "image_10": { "name": "参考图像 10" },
-      "image_11": { "name": "参考图像 11" },
-      "image_12": { "name": "参考图像 12" },
-      "image_13": { "name": "参考图像 13" },
-      "image_14": { "name": "参考图像 14" },
-      "image_15": { "name": "参考图像 15" },
-      "image_16": { "name": "参考图像 16" }
+      "prompt": { "name": "提示词", "tooltip": "图像生成或编辑提示词。" },
+      "api_key": { "name": "API 密钥", "tooltip": "OpenRouter API 密钥。" },
+      "model": { "name": "模型", "tooltip": "OpenRouter 模型标识。" },
+      "response_modalities": { "name": "响应模态", "tooltip": "向模型请求的响应模态。" },
+      "aspect_ratio": { "name": "宽高比", "tooltip": "请求的输出宽高比。" },
+      "image_size": { "name": "图像尺寸", "tooltip": "请求的服务商图像尺寸。" },
+      "max_tokens": { "name": "最大令牌数", "tooltip": "附带文本的最大输出令牌数。" },
+      "temperature": { "name": "温度", "tooltip": "采样温度。" },
+      "top_p": { "name": "Top P", "tooltip": "核心采样参数。" },
+      "reasoning_effort": { "name": "推理强度", "tooltip": "模型支持时请求的推理强度。" },
+      "seed": { "name": "随机种子", "tooltip": "模型支持时使用的确定性种子。" },
+      "base_url": { "name": "API 基础 URL", "tooltip": "OpenRouter 兼容 API 基础地址。" },
+      "timeout_seconds": { "name": "超时时间（秒）", "tooltip": "单次 API 请求的最长等待时间。" },
+      "verify_ssl": { "name": "验证 SSL", "tooltip": "是否验证 HTTPS 证书。" },
+      "system_prompt": { "name": "系统提示词", "tooltip": "在用户提示词前发送的可选系统消息。" },
+      "extra_body_json": { "name": "额外请求 JSON", "tooltip": "合并到 API 请求体中的可选 JSON 对象。" },
+      "images": { "name": "参考图像", "tooltip": "用于图像生成或编辑的可选参考图像。" }
     },
     "outputs": {
-      "0": { "name": "图像" },
-      "1": { "name": "文本" },
-      "2": { "name": "响应 ID" }
+      "0": { "name": "图像", "tooltip": "生成的图像批次；无图时可能返回占位图。" },
+      "1": { "name": "文本", "tooltip": "图像响应附带的文本。" },
+      "2": { "name": "响应 ID", "tooltip": "API 返回的响应标识。" }
+    }
+  },
+  "WuddV3GroupSwitch": {
+    "display_name": "Wudd V3 组开关",
+    "description": "用一个开关节点启用、静音或旁路 ComfyUI 画布分组内的节点。",
+    "inputs": {
+      "enabled": { "name": "启用", "tooltip": "目标组或所有列出组的总开关状态。" },
+      "group_name": { "name": "组名", "tooltip": "目标组标题。留空控制所有组；self/current/auto 控制当前节点所在组。" },
+      "off_mode": { "name": "关闭方式", "tooltip": "关闭时使用 Never 静音模式，或使用 Bypass 旁路模式。" }
+    },
+    "outputs": {
+      "0": { "name": "启用", "tooltip": "当前启用状态。" },
+      "1": { "name": "组名", "tooltip": "当前配置的目标组名。" }
     }
   },
   "WuddV3ChatGPTBrowser": {
     "display_name": "Wudd V3 ChatGPT 浏览器",
-    "description": "通过本机 Chrome/Edge 打开 chatgpt.com，上传可选图像并提交提示词，返回最新回复文本和回复图片。",
+    "description": "通过本机 Chrome 或 Edge 浏览器向 ChatGPT 提交提示词和可选图像。",
     "inputs": {
-      "prompt": { "name": "提示词" },
-      "connection_mode": { "name": "连接模式" },
-      "chatgpt_url": { "name": "ChatGPT URL" },
-      "cdp_url": { "name": "CDP URL" },
-      "wait_timeout_seconds": { "name": "等待超时（秒）" },
-      "stable_seconds": { "name": "稳定等待（秒）" },
-      "upload_wait_seconds": { "name": "上传等待（秒）" },
-      "new_chat": { "name": "新对话" },
-      "submit_action": { "name": "提交方式" },
-      "keep_browser_open": { "name": "保持浏览器打开" },
-      "background_browser": { "name": "后台运行浏览器" },
-      "close_page_after_run": { "name": "运行后关闭标签页" },
-      "parallel_pages": { "name": "并行页数" },
-      "profile_mode": { "name": "资料模式" },
-      "run_id": { "name": "运行 ID" },
-      "image": { "name": "图像" },
-      "browser_executable": { "name": "浏览器程序路径" },
-      "user_data_dir": { "name": "用户资料目录" },
-      "profile_directory": { "name": "浏览器配置文件目录" },
-      "image_error_retries": { "name": "图片错误重试次数" }
+      "prompt": { "name": "提示词", "tooltip": "提交给 ChatGPT 的提示词文本。" },
+      "connection_mode": { "name": "连接模式", "tooltip": "连接或启动 Chrome/Edge 的方式。" },
+      "cdp_url": { "name": "CDP URL", "tooltip": "connect_cdp 模式使用的 Chrome DevTools Protocol 地址。" },
+      "wait_timeout_seconds": { "name": "等待超时（秒）", "tooltip": "等待 ChatGPT 完成回复的最长时间。" },
+      "stable_seconds": { "name": "稳定等待（秒）", "tooltip": "回复内容保持不变多久后视为完成。" },
+      "upload_wait_seconds": { "name": "上传等待（秒）", "tooltip": "图像上传后、提交前额外等待的时间。" },
+      "new_chat": { "name": "新对话", "tooltip": "提交前开启新的 ChatGPT 对话。" },
+      "submit_action": { "name": "提交方式", "tooltip": "使用回车提交，或点击发送按钮提交。" },
+      "keep_browser_open": { "name": "保持浏览器打开", "tooltip": "节点启动的浏览器进程在执行后保持打开。" },
+      "background_browser": { "name": "后台运行浏览器", "tooltip": "尽可能用适合后台运行的参数启动浏览器。" },
+      "parallel_pages": { "name": "并行页数", "tooltip": "并发执行时最多使用的浏览器页面数。" },
+      "run_id": { "name": "运行 ID", "tooltip": "手动缓存破除 ID。改变它可强制重新运行。" },
+      "images": { "name": "图像", "tooltip": "提交提示词前上传的可选参考图像。" },
+      "browser_executable": { "name": "浏览器程序路径", "tooltip": "可选 Chrome 或 Edge 可执行文件路径。" },
+      "close_page_after_run": { "name": "运行后关闭标签页", "tooltip": "节点完成后关闭 ChatGPT 标签页。" },
+      "image_error_retries": { "name": "图片错误重试次数", "tooltip": "ChatGPT 图片生成失败且没有图片时的重试次数。" }
     },
     "outputs": {
-      "0": { "name": "文本" },
-      "1": { "name": "会话 URL" },
-      "2": { "name": "图片" },
-      "3": { "name": "图片数量" }
+      "0": { "name": "文本", "tooltip": "最新助手回复文本。" },
+      "1": { "name": "会话 URL", "tooltip": "提交后的 ChatGPT 会话 URL。" },
+      "2": { "name": "图片", "tooltip": "最新助手回复中的图片；没有图片时返回占位图。" },
+      "3": { "name": "图片数量", "tooltip": "实际找到的回复图片数量。" }
     }
-  },
-  "WuddV3MultiSaveImage": {
-    "display_name": "Wudd V3 批量保存图像"
-  },
-  "WuddV3SaveVideo": {
-    "display_name": "Wudd V3 保存视频"
-  },
-  "WuddV3FastForwardVideo": {
-    "display_name": "Wudd V3 视频快进"
-  },
-  "WuddV3ConcatVideos": {
-    "display_name": "Wudd V3 拼接视频"
-  },
-  "WuddV3TextSplitter": {
-    "display_name": "Wudd V3 文本分行"
-  },
-  "WuddV3MultiTextSplitter": {
-    "display_name": "Wudd V3 多路文本分行"
-  },
-  "WuddV3PromptListFromText": {
-    "display_name": "Wudd V3 提示词列表"
-  },
-  "WuddV3SaveText": {
-    "display_name": "Wudd V3 保存文本",
-    "inputs": {
-      "text": { "name": "文本" },
-      "root_dir": { "name": "根目录" },
-      "file": { "name": "文件" },
-      "append": { "name": "保存模式" },
-      "insert": { "name": "插入到开头" }
-    },
-    "outputs": {
-      "0": { "name": "路径" }
-    }
-  },
-  "WuddV3DropAlpha": {
-    "display_name": "Wudd V3 去除 Alpha"
-  },
-  "WuddV3ImageExpand": {
-    "display_name": "Wudd V3 图像扩展"
-  },
-  "WuddV3EdgePad": {
-    "display_name": "Wudd V3 边缘补图"
-  },
-  "WuddV3ImageListImporter": {
-    "display_name": "Wudd V3 图片列表导入"
-  },
-  "WuddV3ImageStitch": {
-    "display_name": "Wudd V3 图像拼接"
-  },
-  "WuddV3PathJoiner": {
-    "display_name": "Wudd V3 路径拼接"
-  },
-  "WuddV3GroupSwitch": {
-    "display_name": "Wudd V3 组开关"
-  },
-  "WuddV3VideoAudioExtractor": {
-    "display_name": "Wudd V3 从视频提取音频"
-  },
-  "WuddV3ReplaceVideoAudio": {
-    "display_name": "Wudd V3 替换视频音频"
-  },
-  "WuddV3OpenRouterGPTText": {
-    "display_name": "Wudd V3 OpenRouter GPT 文本"
-  },
-  "WuddV3OpenRouterClaudeText": {
-    "display_name": "Wudd V3 OpenRouter Claude 文本"
-  },
-  "WuddV3OpenRouterGeminiText": {
-    "display_name": "Wudd V3 OpenRouter Gemini 文本"
-  },
-  "WuddV3OpenRouterGPTImage": {
-    "display_name": "Wudd V3 OpenRouter GPT 图像"
-  },
-  "WuddV3OpenRouterGeminiImage": {
-    "display_name": "Wudd V3 OpenRouter Gemini 图像"
   }
 }

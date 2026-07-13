@@ -1,6 +1,6 @@
 """Shared image helpers used by separate image execution implementations."""
 
-import numpy as np
+import torch
 
 
 def _parse_hex_color(hex_str):
@@ -20,14 +20,21 @@ def _parse_hex_color(hex_str):
         return (0.5, 0.5, 0.5)
 
 
-def _make_checkerboard(height, width, tile_size):
-    """Build a checkerboard RGB background as [H, W, 3] float32."""
-    c1 = np.array([0.80, 0.80, 0.80], dtype=np.float32)
-    c2 = np.array([0.55, 0.55, 0.55], dtype=np.float32)
-    rows = np.arange(height) // tile_size
-    cols = np.arange(width) // tile_size
-    pattern = (rows[:, None] + cols[None, :]) % 2
-    return np.where(pattern[:, :, None] == 0, c1, c2)
+def _make_checkerboard(height, width, tile_size, *, device=None, dtype=None):
+    """Build a checkerboard directly on the target Torch device."""
+    dtype = dtype or torch.float32
+    rows = torch.arange(height, device=device) // tile_size
+    cols = torch.arange(width, device=device) // tile_size
+    pattern = (rows[:, None] + cols[None, :]).remainder_(2)
+
+    # The previous NumPy implementation created float32 colors before casting
+    # to the input dtype. Preserve that order for exact float64/float16 values.
+    colors = torch.tensor(
+        ((0.80, 0.80, 0.80), (0.55, 0.55, 0.55)),
+        device=device,
+        dtype=torch.float32,
+    ).to(dtype=dtype)
+    return colors[pattern]
 
 
 __all__ = ["_make_checkerboard", "_parse_hex_color"]

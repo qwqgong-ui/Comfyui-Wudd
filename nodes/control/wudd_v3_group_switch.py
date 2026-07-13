@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ._base import *
+from .._base import *
 
 
 class WuddV3GroupSwitch(_BackendNode, IO.ComfyNode):
@@ -8,10 +8,10 @@ class WuddV3GroupSwitch(_BackendNode, IO.ComfyNode):
 
     @classmethod
     def define_schema(cls):
-        return IO.Schema(
+        return _with_help(IO.Schema(
             node_id="WuddV3GroupSwitch",
             display_name="Wudd V3 Group Switch",
-            category=WUDD_V3_CATEGORY,
+            category=CONTROL_CATEGORY,
             inputs=[
                 IO.Boolean.Input("enabled", default=True),
                 IO.String.Input("group_name", default="", multiline=False),
@@ -21,7 +21,7 @@ class WuddV3GroupSwitch(_BackendNode, IO.ComfyNode):
                 IO.Boolean.Output("enabled", display_name="enabled"),
                 IO.String.Output("group_name", display_name="group_name"),
             ],
-        )
+        ))
 
     @classmethod
     async def execute(cls, enabled, group_name="", off_mode="mute") -> IO.NodeOutput:

@@ -1,35 +1,33 @@
 from __future__ import annotations
 
-from ._base import *
+from .._base import *
 
 
-class WuddV3OpenRouterGeminiImage(_OpenRouterV3Node, IO.ComfyNode):
-    BACKEND_CLS = WuddOpenRouterGeminiImage
+class WuddV3OpenRouterGPTImage(_OpenRouterV3Node, IO.ComfyNode):
+    BACKEND_CLS = WuddOpenRouterGPTImage
 
     @classmethod
     def define_schema(cls):
-        return IO.Schema(
-            node_id="WuddV3OpenRouterGeminiImage",
-            display_name="Wudd V3 OpenRouter Gemini Image",
+        return _with_help(IO.Schema(
+            node_id="WuddV3OpenRouterGPTImage",
+            display_name="Wudd V3 OpenRouter GPT Image",
             category=OPENROUTER_IMAGE_CATEGORY,
             inputs=[
                 IO.String.Input("prompt", default="", multiline=True),
                 IO.String.Input("api_key", default=""),
                 IO.Combo.Input(
                     "model",
-                    options=GEMINI_IMAGE_MODELS,
-                    default="google/gemini-3.1-flash-image-preview",
+                    options=OPENAI_GPT_IMAGE_MODELS,
+                    default="openai/gpt-5.4-image-2",
                 ),
                 IO.Combo.Input(
                     "response_modalities",
                     options=IMAGE_RESPONSE_MODALITIES,
                     default="IMAGE+TEXT",
                 ),
-                IO.Combo.Input("aspect_ratio", options=EXTENDED_ASPECT_RATIOS, default="auto"),
-                IO.Combo.Input("image_size", options=GEMINI_IMAGE_SIZES, default="auto"),
+                IO.Combo.Input("aspect_ratio", options=STANDARD_ASPECT_RATIOS, default="auto"),
+                IO.Combo.Input("image_size", options=GPT_IMAGE_SIZES, default="auto"),
                 IO.Int.Input("max_tokens", default=4096, min=16, max=128000, step=1),
-                IO.Float.Input("temperature", default=1.0, min=0.0, max=2.0, step=0.01),
-                IO.Float.Input("top_p", default=1.0, min=0.0, max=1.0, step=0.01),
                 IO.Combo.Input("reasoning_effort", options=REASONING_EFFORTS, default="none"),
                 _seed_input(),
                 *_api_runtime_inputs(),
@@ -46,7 +44,7 @@ class WuddV3OpenRouterGeminiImage(_OpenRouterV3Node, IO.ComfyNode):
                 IO.String.Output("text", display_name="text"),
                 IO.String.Output("response_id", display_name="response_id"),
             ],
-        )
+        ))
 
     @classmethod
     async def execute(
@@ -58,8 +56,6 @@ class WuddV3OpenRouterGeminiImage(_OpenRouterV3Node, IO.ComfyNode):
         aspect_ratio,
         image_size,
         max_tokens,
-        temperature,
-        top_p,
         reasoning_effort,
         seed,
         base_url,
@@ -78,8 +74,6 @@ class WuddV3OpenRouterGeminiImage(_OpenRouterV3Node, IO.ComfyNode):
             aspect_ratio=aspect_ratio,
             image_size=image_size,
             max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=top_p,
             reasoning_effort=reasoning_effort,
             seed=seed,
             base_url=base_url,
@@ -91,4 +85,4 @@ class WuddV3OpenRouterGeminiImage(_OpenRouterV3Node, IO.ComfyNode):
         )
 
 
-__all__ = ["WuddV3OpenRouterGeminiImage"]
+__all__ = ["WuddV3OpenRouterGPTImage"]

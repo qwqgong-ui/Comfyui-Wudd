@@ -9,8 +9,21 @@ function clampInt(value, min, max) {
 function indexedSlotNumber(name, prefix) {
     const value = String(name || "");
     if (!value.startsWith(prefix)) return null;
-    const n = Number.parseInt(value.slice(prefix.length), 10);
+    const suffix = value.slice(prefix.length);
+    if (!/^\d+$/.test(suffix)) return null;
+    const n = Number.parseInt(suffix, 10);
     return Number.isFinite(n) ? n : null;
+}
+
+function dynamicChildIndex(name, parentName, prefix) {
+    return indexedSlotNumber(name, `${parentName}.${prefix}`) ??
+        indexedSlotNumber(name, prefix);
+}
+
+function findDynamicChildWidget(node, parentName, childName) {
+    return node.widgets?.find(w => w.name === `${parentName}.${childName}`) ||
+        node.widgets?.find(w => w.name === childName) ||
+        null;
 }
 
 function slotHasLink(slot) {
@@ -69,16 +82,23 @@ function refreshNode(node, defer = false) {
 }
 
 function wireCountWidget(node, widgetName, apply) {
-    const countWidget = node.widgets?.find(w => w.name === widgetName);
-    if (!countWidget) return;
+    const countWidget = Array.isArray(widgetName)
+        ? node.widgets?.find(w => widgetName.includes(w.name))
+        : node.widgets?.find(w => w.name === widgetName);
+    if (!countWidget) return null;
+
+    countWidget.__wuddDynamicPortsApply = apply;
+    if (countWidget.__wuddDynamicPortsWired) return countWidget;
 
     const origCallback = countWidget.callback;
     countWidget.callback = function () {
-        apply();
-        if (origCallback) return origCallback.apply(this, arguments);
+        countWidget.__wuddDynamicPortsApply?.();
+        return origCallback?.apply(this, arguments);
     };
+    countWidget.__wuddDynamicPortsWired = true;
 
     setTimeout(apply, 50);
+    return countWidget;
 }
 
 function syncOutputCount(node, countWidget, options) {
@@ -138,8 +158,41 @@ app.registerExtension({
         }
 
         if (nodeData.name === "WuddV3ImageListImporter") {
+            function scheduleImageCount(node) {
+                const apply = () => {
+                    try { applyImageCount(node); } catch (e) {
+                        console.error("Wudd ImageListImporter Error:", e);
+                    }
+                };
+
+                // DynamicCombo replaces all branch widgets whenever `mode`
+                // changes. Run once after that synchronous rebuild and once
+                // after the frontend has restored configured widget values.
+                Promise.resolve().then(apply);
+                setTimeout(apply, 50);
+            }
+
+            function wireImageWidgets(node) {
+                const countWidget = findDynamicChildWidget(node, "mode", "image_count");
+                if (countWidget) {
+                    wireCountWidget(node, ["mode.image_count", "image_count"], () => applyImageCount(node));
+                }
+
+                const modeWidget = node.widgets?.find(w => w.name === "mode");
+                if (modeWidget && !modeWidget.__wuddImageListModeWired) {
+                    const origCallback = modeWidget.callback;
+                    modeWidget.callback = function () {
+                        const result = origCallback?.apply(this, arguments);
+                        scheduleImageCount(node);
+                        return result;
+                    };
+                    modeWidget.__wuddImageListModeWired = true;
+                }
+                return countWidget;
+            }
+
             function applyImageCount(node) {
-                const countWidget = node.widgets?.find(w => w.name === "image_count");
+                const countWidget = wireImageWidgets(node);
                 if (!countWidget) return;
 
                 syncOutputCount(node, countWidget, {
@@ -154,7 +207,7 @@ app.registerExtension({
 
                 for (let i = 0; i < (node.widgets?.length || 0); i++) {
                     const widget = node.widgets[i];
-                    const idx = indexedSlotNumber(widget?.name, "image_");
+                    const idx = dynamicChildIndex(widget?.name, "mode", "image_");
                     if (idx == null) continue;
 
                     const visible = idx <= count;
@@ -176,16 +229,8 @@ app.registerExtension({
             nodeType.prototype.onNodeCreated = function () {
                 if (onNodeCreated) onNodeCreated.apply(this, arguments);
                 try {
-                    wireCountWidget(this, "image_count", () => applyImageCount(this));
-                    const node = this;
-                    const modeWidget = node.widgets?.find(w => w.name === "mode");
-                    if (modeWidget) {
-                        const origCallback = modeWidget.callback;
-                        modeWidget.callback = function () {
-                            setTimeout(() => applyImageCount(node), 50);
-                            if (origCallback) return origCallback.apply(this, arguments);
-                        };
-                    }
+                    wireImageWidgets(this);
+                    scheduleImageCount(this);
                 } catch (e) {
                     console.error("Wudd ImageListImporter Error:", e);
                 }
@@ -194,7 +239,7 @@ app.registerExtension({
             const onConfigure = nodeType.prototype.onConfigure;
             nodeType.prototype.onConfigure = function (config) {
                 if (onConfigure) onConfigure.apply(this, arguments);
-                try { applyImageCount(this); } catch (e) {}
+                try { scheduleImageCount(this); } catch (e) {}
             };
         }
     }

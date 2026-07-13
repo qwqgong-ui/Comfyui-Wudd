@@ -1,6 +1,6 @@
 import { app } from "../../../scripts/app.js";
 
-const CATEGORY = "Wudd Nodes V3/Wireless";
+const CATEGORY = "Wudd Nodes V3/Control/Wireless";
 const SENDER_NODE_TYPE = "WuddV3WirelessInput";
 const RECEIVER_NODE_TYPE = "WuddV3WirelessOutput";
 const DEFAULT_NAMESPACE = "main";
@@ -249,8 +249,15 @@ class WuddWirelessBase extends LiteGraph.LGraphNode {
 
     setCount(value) {
         const channels = getChannels(this);
-        const count = clampInt(value, 1, MAX_CHANNELS);
-        while (channels.length < count) channels.push(`value_${channels.length + 1}`);
+        const requested = clampInt(value, 1, MAX_CHANNELS);
+        const isOutput = this.type === RECEIVER_NODE_TYPE;
+        const slots = isOutput ? this.outputs : this.inputs;
+        const linkedMin = highestLinkedSlot(slots, isOutput) + 1;
+        const count = Math.max(requested, linkedMin, 1);
+        while (channels.length < count) {
+            const index = channels.length;
+            channels.push(sanitizeName(slots?.[index]?.name, `value_${index + 1}`));
+        }
         if (channels.length > count) channels.length = count;
         setChannels(this, channels);
         this.syncSlots();
@@ -352,7 +359,10 @@ class WuddWirelessInput extends WuddWirelessBase {
         const channels = getChannels(this);
         const linkedMin = highestLinkedSlot(this.inputs, false) + 1;
         const count = Math.max(channels.length, linkedMin, 1);
-        while (channels.length < count) channels.push(`value_${channels.length + 1}`);
+        while (channels.length < count) {
+            const index = channels.length;
+            channels.push(sanitizeName(this.inputs?.[index]?.name, `value_${index + 1}`));
+        }
         if (channels.length > count) channels.length = count;
 
         while ((this.inputs?.length || 0) < count) {
@@ -449,7 +459,10 @@ class WuddWirelessOutput extends WuddWirelessBase {
         const channels = getChannels(this);
         const linkedMin = highestLinkedSlot(this.outputs, true) + 1;
         const count = Math.max(channels.length, linkedMin, 1);
-        while (channels.length < count) channels.push(`value_${channels.length + 1}`);
+        while (channels.length < count) {
+            const index = channels.length;
+            channels.push(sanitizeName(this.outputs?.[index]?.name, `value_${index + 1}`));
+        }
         if (channels.length > count) channels.length = count;
 
         while ((this.outputs?.length || 0) < count) {

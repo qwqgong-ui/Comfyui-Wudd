@@ -1,23 +1,11 @@
 """Core implementation for WuddImageListImporter."""
 import os
-import re
-import sys
-import json
-import uuid
-import shutil
-import subprocess
-import numpy as np
+from concurrent.futures import ThreadPoolExecutor
+
 from PIL import Image
-from PIL.PngImagePlugin import PngInfo
 import folder_paths
 
-from .common import (
-    WUDD_CATEGORY,
-    CREATE_NO_WINDOW,
-    collect_image_inputs,
-    tensor_to_pil,
-    pil_to_tensor,
-)
+from .common import pil_to_tensor
 
 class WuddImageListImporter:
     MAX_IMAGES = 50
@@ -73,22 +61,6 @@ class WuddImageListImporter:
         return [os.path.join(folder_path, e) for e in entries]
 
     @classmethod
-    def INPUT_TYPES(cls):
-        files = cls._list_input_files()
-        inputs = {
-            "required": {
-                "image_count": ("INT", {"default": 1, "min": 1, "max": cls.MAX_IMAGES, "step": 1}),
-                "mode":        (["files", "folder"], {"default": "files"}),
-                "folder_path": ("STRING", {"default": "", "multiline": False,
-                                            "tooltip": "文件夹路径（绝对或相对 ComfyUI input/）"}),
-            },
-            "optional": {},
-        }
-        for i in range(1, cls.MAX_IMAGES + 1):
-            inputs["required"][f"image_{i}"] = (files, {"image_upload": True})
-        return inputs
-
-    @classmethod
     def IS_CHANGED(cls, image_count, mode="files", folder_path="", **kwargs):
         """缓存键：folder 模式取目录下匹配文件 + mtime；files 模式按所选文件名 + mtime。"""
         if mode == "folder":
@@ -117,10 +89,6 @@ class WuddImageListImporter:
                     pass
         return "|".join(parts)
 
-    RETURN_TYPES = tuple(["IMAGE"] * MAX_IMAGES)
-    RETURN_NAMES = tuple([f"image_{i}" for i in range(1, MAX_IMAGES + 1)])
-    FUNCTION = "import_images"
-    CATEGORY = WUDD_CATEGORY
 
     @staticmethod
     def _load_image_tensor(image_path):
@@ -128,12 +96,36 @@ class WuddImageListImporter:
         import torch
         from PIL import ImageOps
         try:
-            i_img = Image.open(image_path)
-            i_img = ImageOps.exif_transpose(i_img)
-            return pil_to_tensor(i_img.convert("RGB"))
+            with Image.open(image_path) as source:
+                image = ImageOps.exif_transpose(source).convert("RGB")
+                return pil_to_tensor(image)
         except Exception as e:
             print(f"[WuddImageListImporter] Error loading {image_path}: {e}")
             return torch.zeros((1, 64, 64, 3))
+
+    @staticmethod
+    def _worker_count(total_images):
+        if total_images <= 1:
+            return 1
+        configured = os.environ.get("WUDD_IMPORT_WORKERS")
+        if configured:
+            try:
+                return max(1, min(total_images, int(configured)))
+            except ValueError:
+                pass
+        return max(1, min(total_images, os.cpu_count() or 1, 4))
+
+    @classmethod
+    def _load_images_ordered(cls, paths):
+        paths = list(paths)
+        workers = cls._worker_count(len(paths))
+        if workers <= 1:
+            return [cls._load_image_tensor(path) for path in paths]
+        with ThreadPoolExecutor(
+            max_workers=workers,
+            thread_name_prefix="wudd-import",
+        ) as executor:
+            return list(executor.map(cls._load_image_tensor, paths))
 
     def import_images(self, image_count, mode="files", folder_path="", **kwargs):
         import torch
@@ -146,32 +138,35 @@ class WuddImageListImporter:
             else:
                 paths = self._scan_folder(resolved)
 
-            images = []
-            for i in range(self.MAX_IMAGES):
-                if i >= image_count:
-                    images.append(None)
-                elif i < len(paths):
-                    images.append(self._load_image_tensor(paths[i]))
-                else:
-                    images.append(torch.zeros((1, 64, 64, 3)))
+            selected_count = min(int(image_count), self.MAX_IMAGES)
+            loaded = self._load_images_ordered(paths[:selected_count])
+            images = loaded
+            images.extend(
+                torch.zeros((1, 64, 64, 3))
+                for _ in range(selected_count - len(loaded))
+            )
+            images.extend(None for _ in range(self.MAX_IMAGES - selected_count))
             return tuple(images)
 
         # files 模式：按 image_X 选择框逐个加载
-        images = []
-        for i in range(1, self.MAX_IMAGES + 1):
-            if i > image_count:
-                images.append(None)
-                continue
-
+        selected_count = min(int(image_count), self.MAX_IMAGES)
+        selected_paths = []
+        selected_slots = []
+        for i in range(1, selected_count + 1):
             image_name = kwargs.get(f"image_{i}")
             if image_name and image_name != "none":
                 image_path = folder_paths.get_annotated_filepath(image_name)
                 if os.path.exists(image_path):
-                    images.append(self._load_image_tensor(image_path))
-                else:
-                    images.append(torch.zeros((1, 64, 64, 3)))
-            else:
-                images.append(torch.zeros((1, 64, 64, 3)))
+                    selected_paths.append(image_path)
+                    selected_slots.append(i - 1)
+
+        images = [torch.zeros((1, 64, 64, 3)) for _ in range(selected_count)]
+        for slot, image in zip(
+            selected_slots,
+            self._load_images_ordered(selected_paths),
+        ):
+            images[slot] = image
+        images.extend(None for _ in range(self.MAX_IMAGES - selected_count))
 
         return tuple(images)
 

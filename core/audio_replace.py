@@ -1,12 +1,11 @@
 """Core implementation for WuddReplaceVideoAudio."""
 import os
-import shutil
 import subprocess
 import uuid
 
 import folder_paths
 
-from .common import WUDD_CATEGORY, CREATE_NO_WINDOW
+from .common import CREATE_NO_WINDOW
 
 from .ffmpeg import resolve_ffmpeg_exe
 
@@ -97,25 +96,6 @@ class WuddReplaceVideoAudio:
             frame_rate=Fraction(components.frame_rate),
             metadata=getattr(components, "metadata", None),
         ))
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "video": ("VIDEO",),
-                "audio": ("AUDIO",),
-                "output_format": (["mp4", "mkv", "mov"], {"default": "mp4"}),
-                "audio_bitrate": (["128k", "192k", "256k", "320k"], {"default": "192k"}),
-                # "shortest" is accepted for older workflows, but both modes
-                # now keep output duration aligned to the video stream.
-                "end_mode": (["keep_video_length", "shortest"], {"default": "keep_video_length"}),
-            },
-        }
-
-    RETURN_TYPES = ("VIDEO",)
-    RETURN_NAMES = ("video",)
-    FUNCTION = "replace_audio"
-    CATEGORY = WUDD_CATEGORY
 
     def replace_audio(self, video, audio, output_format="mp4", audio_bitrate="192k",
                       end_mode="shortest"):

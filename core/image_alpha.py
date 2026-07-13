@@ -1,23 +1,6 @@
 """Core implementation for WuddDropAlpha."""
-import os
-import re
-import sys
-import json
-import uuid
-import shutil
-import subprocess
-import numpy as np
-from PIL import Image
-from PIL.PngImagePlugin import PngInfo
-import folder_paths
 
-from .common import (
-    WUDD_CATEGORY,
-    CREATE_NO_WINDOW,
-    collect_image_inputs,
-    tensor_to_pil,
-    pil_to_tensor,
-)
+from .image_common import _make_checkerboard, _parse_hex_color
 
 class WuddDropAlpha:
     """
@@ -26,72 +9,28 @@ class WuddDropAlpha:
     背景可选棋盘格或纯色填充，可选按内容区域自动裁剪。
     """
 
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "image": ("IMAGE",),
-                "mode": (["checkerboard", "fill_color"],),
-                "fill_color": ("STRING", {"default": "#808080"}),
-                "tile_size": ("INT", {"default": 16, "min": 4, "max": 128, "step": 4}),
-                "auto_crop": ("BOOLEAN", {"default": False}),
-                "padding": ("INT", {"default": 0, "min": 0, "max": 2048}),
-            },
-            "optional": {
-                # MASK 形状：[B, H, W]，值 1=透明，0=不透明
-                "mask": ("MASK",),
-            },
-        }
-
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("image",)
-    FUNCTION = "drop_alpha"
-    CATEGORY = WUDD_CATEGORY
+    _parse_hex_color = staticmethod(_parse_hex_color)
+    _make_checkerboard = staticmethod(_make_checkerboard)
 
     @staticmethod
-    def _parse_hex_color(hex_str):
-        """'#RRGGBB' → (r, g, b) float 0-1，解析失败返回中灰。"""
-        s = hex_str.strip().lstrip("#")
-        if len(s) == 3:
-            s = s[0]*2 + s[1]*2 + s[2]*2
-        if len(s) != 6:
-            return (0.5, 0.5, 0.5)
-        try:
-            return (int(s[0:2], 16) / 255.0,
-                    int(s[2:4], 16) / 255.0,
-                    int(s[4:6], 16) / 255.0)
-        except ValueError:
-            return (0.5, 0.5, 0.5)
-
-    @staticmethod
-    def _make_checkerboard(H, W, tile_size):
-        """生成棋盘格背景 [H, W, 3] float32，浅灰/深灰交替。"""
-        c1 = np.array([0.80, 0.80, 0.80], dtype=np.float32)
-        c2 = np.array([0.55, 0.55, 0.55], dtype=np.float32)
-        rows = np.arange(H) // tile_size
-        cols = np.arange(W) // tile_size
-        pattern = (rows[:, None] + cols[None, :]) % 2  # [H, W]，0 或 1
-        return np.where(pattern[:, :, None] == 0, c1, c2)  # [H, W, 3]
-
-    @staticmethod
-    def _crop_bounds(mask_np, padding, H, W):
+    def _crop_bounds(mask, padding, H, W):
         """
-        mask_np: [B, H, W]，0=不透明内容区域
+        mask: [B, H, W]，0=不透明内容区域
         返回跨 batch 取并集后加 padding 的裁剪范围 (y1, y2, x1, x2)。
         全透明时返回完整图像尺寸。
         """
-        content = mask_np < 0.5               # [B, H, W] bool，True=有内容
-        union   = content.any(axis=0)         # [H, W]
-        row_any = union.any(axis=1)           # [H]
-        col_any = union.any(axis=0)           # [W]
+        import torch
 
-        if not row_any.any():
+        content = mask < 0.5
+        union = content.any(dim=0)
+        rows = torch.where(union.any(dim=1))[0]
+        if rows.numel() == 0:
             return 0, H, 0, W
 
-        y1 = int(np.argmax(row_any))
-        y2 = int(H - np.argmax(row_any[::-1]))
-        x1 = int(np.argmax(col_any))
-        x2 = int(W - np.argmax(col_any[::-1]))
+        cols = torch.where(union.any(dim=0))[0]
+        y1, y2, x1, x2 = torch.stack(
+            (rows[0], rows[-1] + 1, cols[0], cols[-1] + 1)
+        ).cpu().tolist()
 
         y1 = max(0, y1 - padding)
         y2 = min(H, y2 + padding)
@@ -103,34 +42,127 @@ class WuddDropAlpha:
                    auto_crop=False, padding=0, mask=None):
         import torch
 
-        # mask 未连接 → 直通
-        if mask is None:
-            return (image,)
+        if not isinstance(image, torch.Tensor):
+            raise TypeError("image must be a torch.Tensor.")
+        if image.ndim == 3:
+            image = image.unsqueeze(0)
+        if image.ndim != 4:
+            raise ValueError(
+                f"image must have shape [B, H, W, C], got {tuple(image.shape)}."
+            )
 
-        # mask 全为不透明 → 直通
-        if mask.max().item() <= 1e-5:
-            return (image,)
+        B, H, W, channels = image.shape
+        if B < 1 or H < 1 or W < 1:
+            raise ValueError("image has an empty batch or spatial dimension.")
+        if channels not in (3, 4):
+            raise ValueError(
+                f"image must be RGB or RGBA, got {channels} channels."
+            )
 
-        # mask: [B, H, W] → [B, H, W, 1] 以便广播
-        alpha = mask.unsqueeze(-1).to(image.dtype).to(image.device)
+        rgb = image[..., :3]
+        embedded_transparency = None
+        if channels == 4:
+            embedded_transparency = (1.0 - image[..., 3:4]).clamp(0.0, 1.0)
 
-        B, H, W, _ = image.shape
+        explicit_transparency = None
+        mask_batch = B
+        if mask is not None:
+            if not isinstance(mask, torch.Tensor):
+                raise TypeError("mask must be a torch.Tensor when provided.")
+            if mask.numel() == 0:
+                raise ValueError("mask has an empty dimension.")
+
+            # ComfyUI LoadImage returns a 64x64 all-zero placeholder mask for
+            # images without alpha, regardless of the IMAGE dimensions.  The
+            # legacy node treated any all-zero mask as disconnected before
+            # inspecting its shape, so preserve that workflow behaviour while
+            # still allowing embedded RGBA alpha to be processed below.
+            if mask.max().item() <= 1e-5:
+                mask = None
+
+        if mask is not None:
+            if mask.ndim == 2:
+                mask = mask.unsqueeze(0)
+            elif mask.ndim == 4:
+                if tuple(mask.shape[1:]) == (H, W, 1):
+                    mask = mask[..., 0]
+                elif tuple(mask.shape[1:]) == (1, H, W):
+                    mask = mask[:, 0]
+                else:
+                    raise ValueError(
+                        "4D mask must have shape [B, H, W, 1] or [B, 1, H, W]."
+                    )
+            if mask.ndim != 3:
+                raise ValueError(
+                    f"mask must have shape [B, H, W], got {tuple(mask.shape)}."
+                )
+            if tuple(mask.shape[1:]) != (H, W):
+                raise ValueError(
+                    "mask spatial dimensions must match image; "
+                    f"got {tuple(mask.shape[1:])} versus {(H, W)}."
+                )
+            mask_batch = int(mask.shape[0])
+            if mask_batch < 1:
+                raise ValueError("mask has an empty batch dimension.")
+            explicit_transparency = mask.to(
+                dtype=image.dtype, device=image.device
+            ).clamp(0.0, 1.0).unsqueeze(-1)
+
+        batch_size = max(B, mask_batch)
+        if B not in (1, batch_size) or mask_batch not in (1, batch_size):
+            raise ValueError(
+                "image and mask batch sizes must match or be 1 for broadcasting; "
+                f"got image={B}, mask={mask_batch}."
+            )
+        if B == 1 and batch_size > 1:
+            rgb = rgb.expand(batch_size, -1, -1, -1)
+            if embedded_transparency is not None:
+                embedded_transparency = embedded_transparency.expand(
+                    batch_size, -1, -1, -1
+                )
+        if explicit_transparency is not None and mask_batch == 1 and batch_size > 1:
+            explicit_transparency = explicit_transparency.expand(
+                batch_size, -1, -1, -1
+            )
+
+        if embedded_transparency is None:
+            transparency = explicit_transparency
+        elif explicit_transparency is None:
+            transparency = embedded_transparency
+        else:
+            # RGBA alpha 与显式 ComfyUI mask 取透明区域并集。
+            transparency = 1.0 - (
+                (1.0 - embedded_transparency) * (1.0 - explicit_transparency)
+            )
+
+        # RGB 且无 mask，或所有像素都不透明：仍保证输出只有 RGB 三通道。
+        if transparency is None or transparency.max().item() <= 1e-5:
+            return (rgb.contiguous(),)
 
         if mode == "checkerboard":
-            board = self._make_checkerboard(H, W, tile_size)
-            bg = torch.from_numpy(board).to(image.device)
-            bg = bg.unsqueeze(0).expand(B, -1, -1, -1)               # [B, H, W, 3]
+            bg = self._make_checkerboard(
+                H,
+                W,
+                tile_size,
+                dtype=image.dtype,
+                device=image.device,
+            )
+            bg = bg.unsqueeze(0).expand(batch_size, -1, -1, -1)
         else:  # fill_color
             r, g, b = self._parse_hex_color(fill_color)
             bg = torch.tensor([r, g, b], dtype=image.dtype,
-                              device=image.device).view(1, 1, 1, 3).expand(B, H, W, -1)
+                              device=image.device).view(1, 1, 1, 3).expand(
+                                  batch_size, H, W, -1
+                              )
 
         # mask 在 ComfyUI 中 1=透明，0=不透明
-        result = (image * (1.0 - alpha) + bg * alpha).clamp(0.0, 1.0)
+        result = (
+            rgb * (1.0 - transparency) + bg * transparency
+        ).clamp(0.0, 1.0)
 
         if auto_crop:
             y1, y2, x1, x2 = self._crop_bounds(
-                mask.cpu().numpy(), padding, H, W
+                transparency[..., 0], padding, H, W
             )
             result = result[:, y1:y2, x1:x2, :]
 

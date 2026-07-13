@@ -4,50 +4,6 @@ from .openrouter_common import *
 
 
 class WuddOpenRouterGeminiImage(_OpenRouterBase):
-    @classmethod
-    def INPUT_TYPES(cls):
-        optional = _system_and_extra_inputs()
-        optional.update(_image_port_inputs(MAX_IMAGE_NODE_INPUTS))
-        return {
-            "required": {
-                "prompt": ("STRING", {"default": "", "multiline": True}),
-                "api_key": ("STRING", {"default": ""}),
-                "model": (GEMINI_IMAGE_MODELS, {"default": "google/gemini-3.1-flash-image-preview"}),
-                "response_modalities": (IMAGE_RESPONSE_MODALITIES, {"default": "IMAGE+TEXT"}),
-                "aspect_ratio": (EXTENDED_ASPECT_RATIOS, {"default": "auto"}),
-                "image_size": (GEMINI_IMAGE_SIZES, {"default": "auto"}),
-                "max_tokens": (
-                    "INT",
-                    {"default": 4096, "min": 16, "max": 128000, "step": 1},
-                ),
-                "temperature": (
-                    "FLOAT",
-                    {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.01},
-                ),
-                "top_p": (
-                    "FLOAT",
-                    {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01},
-                ),
-                "reasoning_effort": (REASONING_EFFORTS, {"default": "none"}),
-                "seed": (
-                    "INT",
-                    {
-                        "default": 0,
-                        "min": 0,
-                        "max": 2147483647,
-                        "step": 1,
-                        "control_after_generate": True,
-                    },
-                ),
-                **_api_runtime_inputs(),
-            },
-            "optional": optional,
-        }
-
-    RETURN_TYPES = ("IMAGE", "STRING", "STRING")
-    RETURN_NAMES = ("image", "text", "response_id")
-    CATEGORY = IMAGE_CATEGORY
-
     async def generate(
         self,
         prompt,

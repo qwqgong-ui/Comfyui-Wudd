@@ -2,15 +2,13 @@
 from fractions import Fraction
 import hashlib
 import json
-import math
 import os
-import re
 import subprocess
 import uuid
 
 import folder_paths
 
-from .common import WUDD_CATEGORY, CREATE_NO_WINDOW
+from .common import CREATE_NO_WINDOW
 from .ffmpeg import resolve_ffmpeg_exe
 from .video_common import (
     _collect_video_inputs,
@@ -23,22 +21,6 @@ from .video_common import (
 
 class WuddConcatVideos:
     CACHE_VERSION = "v1"
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "video_1": ("VIDEO",),
-                "video_2": ("VIDEO",),
-                "resize_mode": (["fit_to_first", "stretch_to_first"], {"default": "fit_to_first"}),
-                "audio_mode": (["keep", "none"], {"default": "keep"}),
-            },
-        }
-
-    RETURN_TYPES = ("VIDEO",)
-    RETURN_NAMES = ("video",)
-    FUNCTION = "concat_videos"
-    CATEGORY = WUDD_CATEGORY
 
     @staticmethod
     def _cache_dir():

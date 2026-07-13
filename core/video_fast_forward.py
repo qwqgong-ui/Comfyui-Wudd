@@ -1,16 +1,9 @@
 """Core implementation for WuddFastForwardVideo."""
-from fractions import Fraction
-import hashlib
-import json
 import math
 import os
-import re
 import subprocess
-import uuid
 
-import folder_paths
-
-from .common import WUDD_CATEGORY, CREATE_NO_WINDOW
+from .common import CREATE_NO_WINDOW
 from .ffmpeg import resolve_ffmpeg_exe
 from .video_common import (
     _aac_audio_args,
@@ -21,23 +14,6 @@ from .video_common import (
 )
 
 class WuddFastForwardVideo:
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "video": ("VIDEO",),
-                "mode": (["speed_multiplier", "target_seconds"], {"default": "speed_multiplier"}),
-                "speed_multiplier": ("FLOAT", {"default": 2.0, "min": 0.01, "max": 100.0, "step": 0.01}),
-                "target_seconds": ("FLOAT", {"default": 5.0, "min": 0.001, "max": 86400.0, "step": 0.001}),
-                "audio_mode": (["keep", "none"], {"default": "keep"}),
-            },
-        }
-
-    RETURN_TYPES = ("VIDEO",)
-    RETURN_NAMES = ("video",)
-    FUNCTION = "fast_forward_video"
-    CATEGORY = WUDD_CATEGORY
-
     @staticmethod
     def _validate_speed(speed):
         speed = float(speed)

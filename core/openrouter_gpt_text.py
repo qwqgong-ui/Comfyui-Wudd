@@ -4,41 +4,6 @@ from .openrouter_common import *
 
 
 class WuddOpenRouterGPTText(_OpenRouterBase):
-    @classmethod
-    def INPUT_TYPES(cls):
-        optional = _system_and_extra_inputs()
-        optional.update(_image_port_inputs(MAX_TEXT_IMAGE_INPUTS))
-        return {
-            "required": {
-                "prompt": ("STRING", {"default": "", "multiline": True}),
-                "api_key": ("STRING", {"default": ""}),
-                "model": (OPENAI_GPT_TEXT_MODELS, {"default": "openai/gpt-5.5"}),
-                "max_tokens": (
-                    "INT",
-                    {"default": 4096, "min": 16, "max": 128000, "step": 1},
-                ),
-                "reasoning_effort": (REASONING_EFFORTS, {"default": "none"}),
-                "include_reasoning": ("BOOLEAN", {"default": False}),
-                "response_format": (TEXT_RESPONSE_FORMATS, {"default": "text"}),
-                "seed": (
-                    "INT",
-                    {
-                        "default": 0,
-                        "min": 0,
-                        "max": 2147483647,
-                        "step": 1,
-                        "control_after_generate": True,
-                    },
-                ),
-                **_api_runtime_inputs(),
-            },
-            "optional": optional,
-        }
-
-    RETURN_TYPES = ("STRING", "STRING", "STRING")
-    RETURN_NAMES = ("text", "reasoning", "response_id")
-    CATEGORY = TEXT_CATEGORY
-
     async def generate(
         self,
         prompt,

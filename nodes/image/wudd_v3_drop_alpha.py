@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ._base import *
+from .._base import *
 
 
 class WuddV3DropAlpha(_BackendNode, IO.ComfyNode):
@@ -8,10 +8,10 @@ class WuddV3DropAlpha(_BackendNode, IO.ComfyNode):
 
     @classmethod
     def define_schema(cls):
-        return IO.Schema(
+        return _with_help(IO.Schema(
             node_id="WuddV3DropAlpha",
             display_name="Wudd V3 Drop Alpha",
-            category=WUDD_V3_CATEGORY,
+            category=IMAGE_CATEGORY,
             inputs=[
                 IO.Image.Input("image"),
                 IO.DynamicCombo.Input(
@@ -32,7 +32,7 @@ class WuddV3DropAlpha(_BackendNode, IO.ComfyNode):
                 IO.Mask.Input("mask", optional=True),
             ],
             outputs=[IO.Image.Output("image", display_name="image")],
-        )
+        ))
 
     @classmethod
     async def execute(cls, image, mode=None, auto_crop=False, padding=0, mask=None) -> IO.NodeOutput:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ._base import *
+from .._base import *
 
 
 class WuddV3SaveText(_BackendNode, IO.ComfyNode):
@@ -8,10 +8,10 @@ class WuddV3SaveText(_BackendNode, IO.ComfyNode):
 
     @classmethod
     def define_schema(cls):
-        return IO.Schema(
+        return _with_help(IO.Schema(
             node_id="WuddV3SaveText",
             display_name="Wudd V3 Save Text",
-            category=WUDD_V3_CATEGORY,
+            category=IO_CATEGORY,
             inputs=[
                 IO.String.Input("text", default="", multiline=True),
                 IO.Combo.Input("root_dir", options=["output", "input", "temp"], default="output"),
@@ -21,7 +21,7 @@ class WuddV3SaveText(_BackendNode, IO.ComfyNode):
             ],
             outputs=[IO.String.Output("path", display_name="path")],
             is_output_node=True,
-        )
+        ))
 
     @classmethod
     async def execute(

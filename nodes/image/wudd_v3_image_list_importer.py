@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ._base import *
+from .._base import *
 
 
 class WuddV3ImageListImporter(_BackendNode, IO.ComfyNode):
@@ -8,10 +8,10 @@ class WuddV3ImageListImporter(_BackendNode, IO.ComfyNode):
 
     @classmethod
     def define_schema(cls):
-        return IO.Schema(
+        return _with_help(IO.Schema(
             node_id="WuddV3ImageListImporter",
             display_name="Wudd V3 Image List Importer",
-            category=WUDD_V3_CATEGORY,
+            category=IMAGE_CATEGORY,
             inputs=[
                 IO.DynamicCombo.Input(
                     "mode",
@@ -53,7 +53,7 @@ class WuddV3ImageListImporter(_BackendNode, IO.ComfyNode):
                 IO.Image.Output(f"image_{i}", display_name=f"image_{i}")
                 for i in range(1, WuddImageListImporter.MAX_IMAGES + 1)
             ],
-        )
+        ))
 
     @classmethod
     def fingerprint_inputs(cls, mode=None, **kwargs):

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ._base import *
+from .._base import *
 
 
 class WuddV3ConcatVideos(_BackendNode, IO.ComfyNode):
@@ -8,10 +8,10 @@ class WuddV3ConcatVideos(_BackendNode, IO.ComfyNode):
 
     @classmethod
     def define_schema(cls):
-        return IO.Schema(
+        return _with_help(IO.Schema(
             node_id="WuddV3ConcatVideos",
             display_name="Wudd V3 Concat Videos",
-            category=WUDD_V3_CATEGORY,
+            category=VIDEO_CATEGORY,
             inputs=[
                 _video_autogrow("videos", VIDEO_100_NAMES, min_count=2),
                 IO.Combo.Input(
@@ -22,7 +22,7 @@ class WuddV3ConcatVideos(_BackendNode, IO.ComfyNode):
                 IO.Combo.Input("audio_mode", options=["keep", "none"], default="keep"),
             ],
             outputs=[IO.Video.Output("video", display_name="video")],
-        )
+        ))
 
     @classmethod
     async def execute(

@@ -4,29 +4,29 @@ from __future__ import annotations
 
 from comfy_api.latest import IO, ComfyExtension
 
-from .wudd_v3_multi_save_image import WuddV3MultiSaveImage
-from .wudd_v3_save_video import WuddV3SaveVideo
-from .wudd_v3_fast_forward_video import WuddV3FastForwardVideo
-from .wudd_v3_concat_videos import WuddV3ConcatVideos
-from .wudd_v3_text_splitter import WuddV3TextSplitter
-from .wudd_v3_multi_text_splitter import WuddV3MultiTextSplitter
-from .wudd_v3_prompt_list_from_text import WuddV3PromptListFromText
-from .wudd_v3_save_text import WuddV3SaveText
-from .wudd_v3_drop_alpha import WuddV3DropAlpha
-from .wudd_v3_image_expand import WuddV3ImageExpand
-from .wudd_v3_edge_pad import WuddV3EdgePad
-from .wudd_v3_image_list_importer import WuddV3ImageListImporter
-from .wudd_v3_image_stitch import WuddV3ImageStitch
-from .wudd_v3_path_joiner import WuddV3PathJoiner
-from .wudd_v3_video_audio_extractor import WuddV3VideoAudioExtractor
-from .wudd_v3_replace_video_audio import WuddV3ReplaceVideoAudio
-from .wudd_v3_open_router_gpt_text import WuddV3OpenRouterGPTText
-from .wudd_v3_open_router_claude_text import WuddV3OpenRouterClaudeText
-from .wudd_v3_open_router_gemini_text import WuddV3OpenRouterGeminiText
-from .wudd_v3_open_router_gpt_image import WuddV3OpenRouterGPTImage
-from .wudd_v3_open_router_gemini_image import WuddV3OpenRouterGeminiImage
-from .wudd_v3_group_switch import WuddV3GroupSwitch
-from .wudd_v3_chat_gpt_browser import WuddV3ChatGPTBrowser
+from .image.wudd_v3_multi_save_image import WuddV3MultiSaveImage
+from .image.wudd_v3_drop_alpha import WuddV3DropAlpha
+from .image.wudd_v3_image_expand import WuddV3ImageExpand
+from .image.wudd_v3_edge_pad import WuddV3EdgePad
+from .image.wudd_v3_image_list_importer import WuddV3ImageListImporter
+from .image.wudd_v3_image_stitch import WuddV3ImageStitch
+from .video.wudd_v3_save_video import WuddV3SaveVideo
+from .video.wudd_v3_fast_forward_video import WuddV3FastForwardVideo
+from .video.wudd_v3_concat_videos import WuddV3ConcatVideos
+from .video.wudd_v3_video_audio_extractor import WuddV3VideoAudioExtractor
+from .video.wudd_v3_replace_video_audio import WuddV3ReplaceVideoAudio
+from .text.wudd_v3_text_splitter import WuddV3TextSplitter
+from .text.wudd_v3_multi_text_splitter import WuddV3MultiTextSplitter
+from .text.wudd_v3_prompt_list_from_text import WuddV3PromptListFromText
+from .io.wudd_v3_save_text import WuddV3SaveText
+from .io.wudd_v3_path_joiner import WuddV3PathJoiner
+from .openrouter.wudd_v3_open_router_gpt_text import WuddV3OpenRouterGPTText
+from .openrouter.wudd_v3_open_router_claude_text import WuddV3OpenRouterClaudeText
+from .openrouter.wudd_v3_open_router_gemini_text import WuddV3OpenRouterGeminiText
+from .openrouter.wudd_v3_open_router_gpt_image import WuddV3OpenRouterGPTImage
+from .openrouter.wudd_v3_open_router_gemini_image import WuddV3OpenRouterGeminiImage
+from .control.wudd_v3_group_switch import WuddV3GroupSwitch
+from .browser.wudd_v3_chat_gpt_browser import WuddV3ChatGPTBrowser
 
 
 WUDD_V3_NODE_CLASSES = {

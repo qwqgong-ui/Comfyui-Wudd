@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ._base import *
+from .._base import *
 
 
 class WuddV3ReplaceVideoAudio(_BackendNode, IO.ComfyNode):
@@ -8,10 +8,10 @@ class WuddV3ReplaceVideoAudio(_BackendNode, IO.ComfyNode):
 
     @classmethod
     def define_schema(cls):
-        return IO.Schema(
+        return _with_help(IO.Schema(
             node_id="WuddV3ReplaceVideoAudio",
             display_name="Wudd V3 Replace Video Audio",
-            category=WUDD_V3_CATEGORY,
+            category=VIDEO_CATEGORY,
             inputs=[
                 IO.Video.Input("video"),
                 IO.Audio.Input("audio"),
@@ -24,7 +24,7 @@ class WuddV3ReplaceVideoAudio(_BackendNode, IO.ComfyNode):
                 ),
             ],
             outputs=[IO.Video.Output("video", display_name="video")],
-        )
+        ))
 
     @classmethod
     async def execute(

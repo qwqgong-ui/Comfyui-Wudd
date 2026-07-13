@@ -1,12 +1,6 @@
 """Shared ffmpeg binary resolution."""
 import os
 import shutil
-import subprocess
-import uuid
-
-import folder_paths
-
-from .common import WUDD_CATEGORY, CREATE_NO_WINDOW
 
 
 PACKAGE_DIR = os.path.dirname(os.path.dirname(__file__))

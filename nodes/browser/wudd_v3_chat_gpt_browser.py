@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ._base import *
+from .._base import *
 
 
 class WuddV3ChatGPTBrowser(_FingerprintBackendNode, IO.ComfyNode):
@@ -8,7 +8,7 @@ class WuddV3ChatGPTBrowser(_FingerprintBackendNode, IO.ComfyNode):
 
     @classmethod
     def define_schema(cls):
-        return IO.Schema(
+        return _with_help(IO.Schema(
             node_id="WuddV3ChatGPTBrowser",
             display_name="Wudd V3 ChatGPT Browser",
             category=CHATGPT_BROWSER_CATEGORY,
@@ -83,7 +83,7 @@ class WuddV3ChatGPTBrowser(_FingerprintBackendNode, IO.ComfyNode):
                 IO.Int.Output("image_count", display_name="image_count"),
             ],
             hidden=[IO.Hidden.unique_id],
-        )
+        ))
 
     @classmethod
     async def execute(

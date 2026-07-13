@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ._base import *
+from .._base import *
 
 
 class WuddV3PromptListFromText(_BackendNode, IO.ComfyNode):
@@ -8,10 +8,10 @@ class WuddV3PromptListFromText(_BackendNode, IO.ComfyNode):
 
     @classmethod
     def define_schema(cls):
-        return IO.Schema(
+        return _with_help(IO.Schema(
             node_id="WuddV3PromptListFromText",
             display_name="Wudd V3 Prompt List From Text",
-            category=WUDD_V3_CATEGORY,
+            category=TEXT_CATEGORY,
             inputs=[
                 IO.String.Input("text", default="", multiline=True),
                 IO.Boolean.Input("skip_empty", default=True),
@@ -21,7 +21,7 @@ class WuddV3PromptListFromText(_BackendNode, IO.ComfyNode):
                 IO.String.Output("prompts", display_name="prompts", is_output_list=True),
                 IO.Int.Output("count", display_name="count"),
             ],
-        )
+        ))
 
     @classmethod
     async def execute(cls, text, skip_empty=True, strip_numbering=True) -> IO.NodeOutput:

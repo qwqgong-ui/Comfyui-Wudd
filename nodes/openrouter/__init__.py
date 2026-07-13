@@ -1,0 +1,1 @@
+"""OpenRouter node schemas."""

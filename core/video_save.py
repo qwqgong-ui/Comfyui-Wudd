@@ -1,8 +1,5 @@
 """Core implementation for WuddSaveVideo."""
-from fractions import Fraction
-import hashlib
 import json
-import math
 import os
 import re
 import subprocess
@@ -11,7 +8,7 @@ import uuid
 import folder_paths
 
 from .ffmpeg import resolve_ffmpeg_exe
-from .common import WUDD_CATEGORY, CREATE_NO_WINDOW
+from .common import CREATE_NO_WINDOW
 
 
 def _video_index(name):
@@ -37,30 +34,6 @@ class WuddSaveVideo:
     def __init__(self):
         self.output_dir = folder_paths.get_output_directory()
         self.type = "output"
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "video_1": ("VIDEO",),
-                "save_mode": (["append", "overwrite"], {"default": "append"}),
-                "codec": (["av1", "h265"], {"default": "av1"}),
-                "encoder": (["cpu", "nvidia", "intel", "amd"], {"default": "cpu"}),
-                "container": (["mp4", "mkv"], {"default": "mp4"}),
-                "crf": ("INT", {"default": 28, "min": 0, "max": 51, "step": 1}),
-                "preset": (["fast", "medium", "slow"], {"default": "medium"}),
-                "audio_mode": (["copy", "aac", "none"], {"default": "copy"}),
-            },
-            "optional": {
-                "filename_prefix": ("STRING", {"default": "Wudd_Video"}),
-            },
-            "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
-        }
-
-    RETURN_TYPES = ()
-    FUNCTION = "save_videos"
-    OUTPUT_NODE = True
-    CATEGORY = WUDD_CATEGORY
 
     @staticmethod
     def _temp_path(suffix):

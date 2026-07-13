@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ._base import *
+from .._base import *
 
 
 class WuddV3ImageExpand(_BackendNode, IO.ComfyNode):
@@ -8,10 +8,10 @@ class WuddV3ImageExpand(_BackendNode, IO.ComfyNode):
 
     @classmethod
     def define_schema(cls):
-        return IO.Schema(
+        return _with_help(IO.Schema(
             node_id="WuddV3ImageExpand",
             display_name="Wudd V3 Image Expand",
-            category=WUDD_V3_CATEGORY,
+            category=IMAGE_CATEGORY,
             inputs=[
                 IO.Image.Input("image"),
                 IO.Combo.Input("direction", options=["right", "down", "left", "up"], default="right"),
@@ -35,7 +35,7 @@ class WuddV3ImageExpand(_BackendNode, IO.ComfyNode):
                 IO.Int.Output("width", display_name="width"),
                 IO.Int.Output("height", display_name="height"),
             ],
-        )
+        ))
 
     @classmethod
     async def execute(cls, image, direction, count, mode=None) -> IO.NodeOutput:

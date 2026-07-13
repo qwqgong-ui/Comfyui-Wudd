@@ -422,7 +422,66 @@ async def case_drop_alpha(node_cls: type, ctx: CheckContext) -> dict[str, Any]:
     tensor = assert_tensor_shape(result[0], 4)
     if list(tensor.shape) != [1, 16, 16, 3]:
         raise AssertionError(f"Unexpected image shape: {tuple(tensor.shape)}")
-    return {"inputs": summarize_value(inputs), "output": summarize_output(output)}
+
+    # LoadImage uses a fixed 64x64 all-zero placeholder mask for images
+    # without alpha.  It must remain equivalent to an unconnected mask even
+    # when the IMAGE has different spatial dimensions.
+    placeholder_mask_inputs = {
+        **inputs,
+        "mask": torch.zeros((1, 64, 64), dtype=torch.float32),
+    }
+    placeholder_mask_output = await node_cls.execute(**placeholder_mask_inputs)
+    placeholder_mask_result, _ = node_result(placeholder_mask_output)
+    placeholder_mask_tensor = assert_tensor_shape(placeholder_mask_result[0], 4)
+    if not torch.equal(placeholder_mask_tensor, ctx.sample_image_rgb):
+        raise AssertionError("All-zero LoadImage placeholder mask changed the RGB image.")
+
+    rgba = torch.cat(
+        [ctx.sample_image_rgb, torch.ones((1, 16, 16, 1), dtype=torch.float32)],
+        dim=-1,
+    )
+    rgba[:, :, 8:, 3] = 0.0
+    rgba_no_mask_inputs = {
+        "image": rgba,
+        "mode": {"mode": "fill_color", "fill_color": "#00ff00"},
+        "auto_crop": False,
+        "padding": 0,
+    }
+    rgba_no_mask_output = await node_cls.execute(**rgba_no_mask_inputs)
+    rgba_no_mask_result, _ = node_result(rgba_no_mask_output)
+    rgba_no_mask_tensor = assert_tensor_shape(rgba_no_mask_result[0], 4)
+    if list(rgba_no_mask_tensor.shape) != [1, 16, 16, 3]:
+        raise AssertionError(
+            f"Unexpected RGBA/no-mask shape: {tuple(rgba_no_mask_tensor.shape)}"
+        )
+    expected_green = torch.tensor([0.0, 1.0, 0.0])
+    if not torch.allclose(rgba_no_mask_tensor[0, 0, 8], expected_green):
+        raise AssertionError(
+            "Embedded RGBA alpha was not composited onto the fill color."
+        )
+
+    rgba_with_mask_inputs = {
+        "image": rgba,
+        "mode": {"mode": "fill_color", "fill_color": "#ff0000"},
+        "auto_crop": False,
+        "padding": 0,
+        "mask": ctx.sample_mask,
+    }
+    rgba_with_mask_output = await node_cls.execute(**rgba_with_mask_inputs)
+    rgba_with_mask_result, _ = node_result(rgba_with_mask_output)
+    rgba_with_mask_tensor = assert_tensor_shape(rgba_with_mask_result[0], 4)
+    if list(rgba_with_mask_tensor.shape) != [1, 16, 16, 3]:
+        raise AssertionError(
+            f"Unexpected RGBA/mask shape: {tuple(rgba_with_mask_tensor.shape)}"
+        )
+
+    return {
+        "inputs": summarize_value(inputs),
+        "output": summarize_output(output),
+        "placeholder_mask_output": summarize_output(placeholder_mask_output),
+        "rgba_no_mask_output": summarize_output(rgba_no_mask_output),
+        "rgba_with_mask_output": summarize_output(rgba_with_mask_output),
+    }
 
 
 async def case_image_expand(node_cls: type, ctx: CheckContext) -> dict[str, Any]:
@@ -441,22 +500,47 @@ async def case_image_expand(node_cls: type, ctx: CheckContext) -> dict[str, Any]
 
 
 async def case_image_stitch(node_cls: type, ctx: CheckContext) -> dict[str, Any]:
+    primary_batch = torch.cat(
+        [ctx.sample_image_rgb, 1.0 - ctx.sample_image_rgb], dim=0
+    )
     inputs = {
-        "images": {"image_1": ctx.sample_image_rgb, "image_2": ctx.sample_image_alt},
+        "images": {"image_1": primary_batch, "image_2": ctx.sample_image_alt},
         "direction": "right",
         "gap": 2,
     }
     output = await node_cls.execute(**inputs)
     result, _ = node_result(output)
     tensor = assert_tensor_shape(result[0], 4)
-    if tensor.shape[1] != 16 or tensor.shape[2] <= 16:
+    if list(tensor.shape) != [2, 16, 26, 3]:
         raise AssertionError(f"Unexpected stitch shape: {tuple(tensor.shape)}")
+    if torch.equal(tensor[0], tensor[1]):
+        raise AssertionError("ImageStitch silently collapsed distinct batch frames.")
+
+    invalid_inputs = {
+        "images": {
+            "image_1": primary_batch,
+            "image_2": ctx.sample_image_alt.expand(3, -1, -1, -1),
+        },
+        "direction": "right",
+        "gap": 0,
+    }
+    try:
+        await node_cls.execute(**invalid_inputs)
+    except ValueError as exc:
+        if "batch sizes" not in str(exc):
+            raise AssertionError(f"Unexpected batch validation error: {exc}") from exc
+    else:
+        raise AssertionError("ImageStitch accepted incompatible batch sizes 2 and 3.")
+
     return {"inputs": summarize_value(inputs), "output": summarize_output(output)}
 
 
 async def case_edge_pad(node_cls: type, ctx: CheckContext) -> dict[str, Any]:
+    first_batch = image_tensor(7, 4, 0.1).expand(2, -1, -1, -1).clone()
+    first_batch[1] = 1.0 - first_batch[1]
+    second_single = image_tensor(11, 6, 0.4)
     inputs = {
-        "images": {"image_1": ctx.sample_image_rgb, "image_2": ctx.sample_image_rgb.clone()},
+        "images": {"image_1": first_batch, "image_2": second_single},
         "pad_px": 10,
         "blend_pct": 3.0,
         "pad_sigma": 2.0,
@@ -469,8 +553,12 @@ async def case_edge_pad(node_cls: type, ctx: CheckContext) -> dict[str, Any]:
         raise AssertionError(f"Expected 16 outputs, got {len(result)}")
     first = assert_tensor_shape(result[0], 4)
     second = assert_tensor_shape(result[1], 4)
-    if first.shape[1] != 36 or second.shape[1] != 36:
+    if list(first.shape) != [2, 24, 7, 3]:
+        raise AssertionError(f"Unexpected first edge pad shape: {first.shape}")
+    if list(second.shape) != [2, 26, 11, 3]:
         raise AssertionError(f"Unexpected edge pad shapes: {first.shape}, {second.shape}")
+    if torch.equal(first[0], first[1]):
+        raise AssertionError("EdgePad silently collapsed distinct batch frames.")
     return {"inputs": summarize_value(inputs), "output": summarize_output(output)}
 
 
@@ -508,23 +596,61 @@ async def case_image_list_folder(node_cls: type, ctx: CheckContext) -> dict[str,
 
 
 async def case_multi_save_image(node_cls: type, ctx: CheckContext) -> dict[str, Any]:
-    inputs = {
-        "images": {"image_1": ctx.sample_image_rgb},
-        "filename_prefix": "wudd_node_check/functional_image",
-        "save_mode": "overwrite",
-        "extension": {"extension": "png"},
+    from comfy.cli_args import args as comfy_args
+
+    original_disable_metadata = getattr(comfy_args, "disable_metadata", False)
+    try:
+        comfy_args.disable_metadata = False
+        inputs = {
+            "images": {"image_1": ctx.sample_image_rgb},
+            "filename_prefix": "wudd_node_check/functional_image",
+            "save_mode": "overwrite",
+            "extension": {"extension": "png"},
+        }
+        output = await node_cls.execute(**inputs)
+        result, ui = node_result(output)
+        images = (ui or {}).get("images", [])
+        if result != ():
+            raise AssertionError(f"Save image should not return result values: {result!r}")
+        if not images:
+            raise AssertionError("Save image UI did not include image entries")
+        saved = ctx.output_dir / images[0].get("subfolder", "") / images[0]["filename"]
+        if not saved.exists() or saved.stat().st_size <= 0:
+            raise AssertionError(f"Saved image not found: {saved}")
+        with Image.open(saved) as saved_image:
+            if "prompt" not in saved_image.text:
+                raise AssertionError("PNG metadata was unexpectedly omitted when enabled.")
+
+        comfy_args.disable_metadata = True
+        no_metadata_inputs = {
+            **inputs,
+            "filename_prefix": "wudd_node_check/functional_image_no_metadata",
+        }
+        no_metadata_output = await node_cls.execute(**no_metadata_inputs)
+        _, no_metadata_ui = node_result(no_metadata_output)
+        no_metadata_images = (no_metadata_ui or {}).get("images", [])
+        if not no_metadata_images:
+            raise AssertionError("Metadata-disabled save did not include a UI image entry.")
+        no_metadata_saved = (
+            ctx.output_dir
+            / no_metadata_images[0].get("subfolder", "")
+            / no_metadata_images[0]["filename"]
+        )
+        with Image.open(no_metadata_saved) as saved_image:
+            if saved_image.text:
+                raise AssertionError(
+                    f"PNG metadata was written despite --disable-metadata: "
+                    f"{sorted(saved_image.text)}"
+                )
+    finally:
+        comfy_args.disable_metadata = original_disable_metadata
+
+    return {
+        "inputs": summarize_value(inputs),
+        "saved_file": str(saved),
+        "metadata_disabled_file": str(no_metadata_saved),
+        "output": summarize_output(output),
     }
-    output = await node_cls.execute(**inputs)
-    result, ui = node_result(output)
-    images = (ui or {}).get("images", [])
-    if result != ():
-        raise AssertionError(f"Save image should not return result values: {result!r}")
-    if not images:
-        raise AssertionError("Save image UI did not include image entries")
-    saved = ctx.output_dir / images[0].get("subfolder", "") / images[0]["filename"]
-    if not saved.exists() or saved.stat().st_size <= 0:
-        raise AssertionError(f"Saved image not found: {saved}")
-    return {"inputs": summarize_value(inputs), "saved_file": str(saved), "output": summarize_output(output)}
 
 
 async def case_video_audio_extractor(node_cls: type, ctx: CheckContext) -> dict[str, Any]:

@@ -1,180 +1,302 @@
-"""Core implementation for WuddEdgePad."""
-import os
-import re
-import sys
-import json
-import uuid
-import shutil
-import subprocess
-import numpy as np
-from PIL import Image
-from PIL.PngImagePlugin import PngInfo
-import folder_paths
+"""Torch-native edge padding for vertically stitched image workflows."""
 
-from .common import (
-    WUDD_CATEGORY,
-    CREATE_NO_WINDOW,
-    collect_image_inputs,
-    tensor_to_pil,
-    pil_to_tensor,
-)
+import math
+
+import torch
+import torch.nn.functional as F
+
+from .common import collect_image_inputs
+
 
 class WuddEdgePad:
-    """
-    多图输入版竖向全景预处理节点。
-    核心思路：把相邻两图的真实边缘内容拼在一起做高斯模糊，
-    自然融合后分别作为两图的扩充 pad，彻底消除纯色色带。
-    原图上下边沿做 smoothstep 倒角，pad/图衔接处再做一次模糊。
-    """
-
     MAX_INPUTS = 16
 
+    @staticmethod
+    def _gaussian_kernel(sigma, extent, device, dtype):
+        if sigma <= 0 or extent <= 1:
+            return None, 0
+        radius = min(max(1, int(4.0 * sigma + 0.5)), extent - 1)
+        positions = torch.arange(-radius, radius + 1, device=device, dtype=dtype)
+        kernel = torch.exp(-(positions * positions) / (2.0 * sigma * sigma))
+        return kernel / kernel.sum(), radius
+
     @classmethod
-    def INPUT_TYPES(cls):
-        required = {
-            "image_1":    ("IMAGE",),
-            "pad_px":     ("INT",   {"default": 100,  "min": 10,  "max": 500,  "step": 1}),
-            "blend_pct":  ("FLOAT", {"default": 3.0,  "min": 0.5, "max": 20.0, "step": 0.5,
-                                     "tooltip": "pad/图衔接带占图高百分比（两侧各此值）"}),
-            "pad_sigma":  ("FLOAT", {"default": 30.0, "min": 1.0, "max": 200.0,"step": 1.0,
-                                     "tooltip": "跨图混合高斯模糊强度（越大色带越不明显）"}),
-            "blend_sigma":("FLOAT", {"default": 12.0, "min": 1.0, "max": 80.0, "step": 0.5,
-                                     "tooltip": "pad/图衔接带的额外模糊强度"}),
-            "chamfer_pct":("FLOAT", {"default": 20.0, "min": 0.0, "max": 80.0, "step": 1.0,
-                                     "tooltip": "原图上下边沿倒角深度（占图高百分比，0=关闭）"}),
-        }
-        optional = {f"image_{i}": ("IMAGE",) for i in range(2, cls.MAX_INPUTS + 1)}
-        return {"required": required, "optional": optional}
+    def _gaussian_blur(cls, image, sigma_y, sigma_x):
+        """Apply a separable Gaussian blur to a BHWC tensor."""
+        if sigma_y <= 0 and sigma_x <= 0:
+            return image
+        work = image.movedim(-1, 1)
+        channels = work.shape[1]
 
-    RETURN_TYPES  = ("IMAGE",) * MAX_INPUTS
-    RETURN_NAMES  = tuple(f"image_{i}" for i in range(1, MAX_INPUTS + 1))
-    FUNCTION      = "pad_edges"
-    CATEGORY      = WUDD_CATEGORY
+        kernel_y, radius_y = cls._gaussian_kernel(
+            sigma_y, work.shape[2], work.device, work.dtype
+        )
+        if kernel_y is not None:
+            weight_y = kernel_y.view(1, 1, -1, 1).expand(channels, 1, -1, 1)
+            work = F.conv2d(
+                F.pad(work, (0, 0, radius_y, radius_y), mode="reflect"),
+                weight_y,
+                groups=channels,
+            )
 
-    # ------------------------------------------------------------------ helpers
-
-    @staticmethod
-    def _chamfer(arr, ch):
-        """
-        原图顶/底各 ch 行做 smoothstep 倒角，渐变混入该侧的平均色。
-        就地修改，返回所用平均色供后续使用。
-        """
-        if ch <= 0:
-            H = arr.shape[0]
-            sr = max(1, H // 16)
-            top_c = arr[:sr].mean(axis=(0, 1))
-            bot_c = arr[H - sr:].mean(axis=(0, 1))
-            return top_c, bot_c
-        H = arr.shape[0]
-        sr = max(1, ch)
-        top_c = arr[:sr].mean(axis=(0, 1)).astype(np.float32)
-        bot_c = arr[H - sr:].mean(axis=(0, 1)).astype(np.float32)
-        t = np.linspace(0.0, 1.0, ch, dtype=np.float32).reshape(ch, 1, 1)
-        a = t * t * (3.0 - 2.0 * t)
-        arr[:ch]     = arr[:ch]     * a + top_c * (1.0 - a)
-        arr[H - ch:] = arr[H - ch:] * a[::-1] + bot_c * (1.0 - a[::-1])
-        return top_c, bot_c
+        kernel_x, radius_x = cls._gaussian_kernel(
+            sigma_x, work.shape[3], work.device, work.dtype
+        )
+        if kernel_x is not None:
+            weight_x = kernel_x.view(1, 1, 1, -1).expand(channels, 1, 1, -1)
+            work = F.conv2d(
+                F.pad(work, (radius_x, radius_x, 0, 0), mode="reflect"),
+                weight_x,
+                groups=channels,
+            )
+        return work.movedim(1, -1)
 
     @staticmethod
-    def _cross_blend_pad(a_bot_rows, b_top_rows, pad_px, sigma):
-        """
-        把 a 的底部行与 b 的顶部行拼合后做高斯模糊，
-        返回 (a的底部扩充pad, b的顶部扩充pad)，shape均为 [pad_px, W, C]。
-        拼接边界两侧取自同一个模糊数组，颜色天然连续无跳变。
-        """
-        from scipy.ndimage import gaussian_filter
-        combined = np.concatenate([a_bot_rows, b_top_rows], axis=0).astype(np.float64)
-        blurred  = gaussian_filter(combined, sigma=[sigma, sigma * 0.3, 0]).astype(np.float32)
-        return blurred[:pad_px], blurred[pad_px:]
+    def _resize_edge_rows(rows, target_height, target_width, reference):
+        if rows.device != reference.device or rows.dtype != reference.dtype:
+            rows = rows.to(device=reference.device, dtype=reference.dtype)
+        if rows.shape[1] == target_height and rows.shape[2] == target_width:
+            return rows
+        resized = F.interpolate(
+            rows.movedim(-1, 1),
+            size=(target_height, target_width),
+            mode="bilinear",
+            align_corners=False,
+        )
+        return resized.movedim(1, -1)
+
+    @classmethod
+    def _edge_pad(cls, edge_rows, pad_px, sigma):
+        edge_rows = cls._resize_edge_rows(
+            edge_rows, pad_px, edge_rows.shape[2], edge_rows
+        )
+        return cls._gaussian_blur(
+            edge_rows.flip(1), float(sigma), float(sigma) * 0.3
+        )
+
+    @classmethod
+    def _cross_blend_pad(cls, a_bottom, b_top, pad_px, sigma):
+        def blend_for(reference):
+            target_width = reference.shape[2]
+            a_rows = cls._resize_edge_rows(a_bottom, pad_px, target_width, reference)
+            b_rows = cls._resize_edge_rows(b_top, pad_px, target_width, reference)
+            combined = torch.cat((a_rows, b_rows), dim=1)
+            return cls._gaussian_blur(
+                combined, float(sigma), float(sigma) * 0.3
+            )
+
+        blended_a = blend_for(a_bottom)
+        same_target = (
+            a_bottom.shape[2] == b_top.shape[2]
+            and a_bottom.device == b_top.device
+            and a_bottom.dtype == b_top.dtype
+        )
+        blended_b = blended_a if same_target else blend_for(b_top)
+        return blended_a[:, :pad_px], blended_b[:, pad_px:]
 
     @staticmethod
-    def _edge_pad(edge_rows, pad_px, sigma, outward=True):
-        """
-        首/末图的外侧 pad：将边缘内容镜像后模糊，给出自然过渡。
-        outward=True 表示向外延伸（top 方向用镜像；bot 方向用镜像）。
-        """
-        from scipy.ndimage import gaussian_filter
-        mirrored = edge_rows[::-1].copy()            # 镜像边缘内容
-        blurred  = gaussian_filter(
-            mirrored.astype(np.float64), sigma=[sigma, sigma * 0.3, 0]
-        ).astype(np.float32)
-        return blurred[:pad_px]
+    def _chamfer(image, chamfer_rows):
+        if chamfer_rows <= 0:
+            return image
+        height = image.shape[1]
+        chamfer_rows = min(chamfer_rows, height)
+        top_color = image[:, :chamfer_rows].mean(dim=(1, 2), keepdim=True)
+        bottom_color = image[:, height - chamfer_rows :].mean(
+            dim=(1, 2), keepdim=True
+        )
+        t = torch.linspace(
+            0.0,
+            1.0,
+            chamfer_rows,
+            device=image.device,
+            dtype=image.dtype,
+        ).view(1, chamfer_rows, 1, 1)
+        alpha = t * t * (3.0 - 2.0 * t)
+        result = image.clone()
+        result[:, :chamfer_rows] = (
+            image[:, :chamfer_rows] * alpha + top_color * (1.0 - alpha)
+        )
+        reverse_alpha = alpha.flip(1)
+        result[:, height - chamfer_rows :] = (
+            image[:, height - chamfer_rows :] * reverse_alpha
+            + bottom_color * (1.0 - reverse_alpha)
+        )
+        return result
 
-    @staticmethod
-    def _blend_junctions(canvas, pad_px, H, br, sigma):
-        """在 pad/图两个衔接点做余弦钟形权重 × 高斯模糊（就地）。"""
-        from scipy.ndimage import gaussian_filter
-        TH = canvas.shape[0]
-        blurred = gaussian_filter(
-            canvas.astype(np.float64), sigma=[sigma, sigma * 0.3, 0]
-        ).astype(np.float32)
-        weight = np.zeros(TH, dtype=np.float32)
-        for j in (pad_px, pad_px + H):
-            r0 = max(0, j - br)
-            r1 = min(TH, j + br)
-            idxs = np.arange(r0, r1, dtype=np.float32)
-            t    = (idxs - j) / br
-            w    = 0.5 * (1.0 + np.cos(t * np.pi))
-            weight[r0:r1] = np.maximum(weight[r0:r1], w)
-        weight = weight.reshape(TH, 1, 1)
-        return canvas * (1.0 - weight) + blurred * weight
+    @classmethod
+    def _blend_junction_band(cls, canvas, junction, blend_rows, sigma):
+        total_height = canvas.shape[1]
+        band_start = max(0, junction - blend_rows)
+        band_end = min(total_height, junction + blend_rows)
+        if band_end <= band_start:
+            return canvas
 
-    # ------------------------------------------------------------------ main
+        halo = int(math.ceil(4.0 * max(0.0, float(sigma))))
+        region_start = max(0, band_start - halo)
+        region_end = min(total_height, band_end + halo)
+        region = canvas[:, region_start:region_end]
+        blurred = cls._gaussian_blur(region, float(sigma), float(sigma) * 0.3)
+        blurred_band = blurred[
+            :, band_start - region_start : band_end - region_start
+        ]
 
-    def pad_edges(self, image_1, pad_px, blend_pct, pad_sigma,
-                  blend_sigma, chamfer_pct, **kwargs):
-        import torch
+        positions = torch.arange(
+            band_start,
+            band_end,
+            device=canvas.device,
+            dtype=canvas.dtype,
+        )
+        phase = (positions - junction) / blend_rows
+        weight = (0.5 * (1.0 + torch.cos(phase * torch.pi))).view(
+            1, -1, 1, 1
+        )
+        result = canvas.clone()
+        result[:, band_start:band_end] = (
+            canvas[:, band_start:band_end] * (1.0 - weight)
+            + blurred_band * weight
+        )
+        return result
 
-        tensors = collect_image_inputs(image_1, kwargs)
-        arrs = [t[0].cpu().numpy().copy().astype(np.float32) for t in tensors]
-        N = len(arrs)
+    @classmethod
+    def _blend_junctions(cls, canvas, pad_px, image_height, blend_rows, sigma):
+        canvas = cls._blend_junction_band(
+            canvas, pad_px, blend_rows, sigma
+        )
+        return cls._blend_junction_band(
+            canvas, pad_px + image_height, blend_rows, sigma
+        )
 
-        # ── 第一步：预先计算每张图的 top_pad / bot_pad ──────────────────────
-        top_pads = [None] * N
-        bot_pads = [None] * N
+    @classmethod
+    def _pad_batches(
+        cls,
+        images,
+        pad_px,
+        blend_pct,
+        pad_sigma,
+        blend_sigma,
+        chamfer_pct,
+    ):
+        count = len(images)
+        top_pads = [None] * count
+        bottom_pads = [None] * count
 
-        for i in range(N):
-            H, W, C = arrs[i].shape
-            grab = min(pad_px, H)           # 取多少行参与混合
-
-            if i == 0:
-                # 第一张顶部：镜像自身顶部内容向外模糊
-                top_pads[0] = self._edge_pad(arrs[0][:grab], pad_px, pad_sigma)
-            if i == N - 1:
-                # 最后一张底部：镜像自身底部内容向外模糊
-                bot_pads[N - 1] = self._edge_pad(arrs[N-1][-grab:], pad_px, pad_sigma)
-
-            if i < N - 1:
-                # 相邻两图的跨图混合 pad
-                grab_i  = min(pad_px, arrs[i].shape[0])
-                grab_i1 = min(pad_px, arrs[i + 1].shape[0])
-                a_bot = arrs[i    ][-grab_i :]
-                b_top = arrs[i + 1][: grab_i1]
-                bot_pads[i], top_pads[i + 1] = self._cross_blend_pad(
-                    a_bot, b_top, pad_px, pad_sigma
+        for index, image in enumerate(images):
+            height = image.shape[1]
+            grab = min(pad_px, height)
+            if index == 0:
+                top_pads[0] = cls._edge_pad(image[:, :grab], pad_px, pad_sigma)
+            if index == count - 1:
+                bottom_pads[-1] = cls._edge_pad(
+                    image[:, height - grab :], pad_px, pad_sigma
+                )
+            if index < count - 1:
+                next_image = images[index + 1]
+                next_grab = min(pad_px, next_image.shape[1])
+                bottom_pads[index], top_pads[index + 1] = cls._cross_blend_pad(
+                    image[:, height - grab :],
+                    next_image[:, :next_grab],
+                    pad_px,
+                    pad_sigma,
                 )
 
-        # ── 第二步：对每张图做倒角 + 拼接 + 衔接模糊 ────────────────────────
-        results_np = []
-        for i, arr in enumerate(arrs):
-            H, W, C = arr.shape
-            ch = max(0, int(H * chamfer_pct / 100.0))
-            br = max(2, int(H * blend_pct   / 100.0))
+        results = []
+        for index, image in enumerate(images):
+            height = image.shape[1]
+            chamfer_rows = max(0, int(height * chamfer_pct / 100.0))
+            blend_rows = max(2, int(height * blend_pct / 100.0))
+            chamfered = cls._chamfer(image, chamfer_rows)
+            canvas = torch.cat(
+                (top_pads[index], chamfered, bottom_pads[index]), dim=1
+            )
+            canvas = cls._blend_junctions(
+                canvas,
+                pad_px,
+                height,
+                blend_rows,
+                blend_sigma,
+            )
+            results.append(canvas.clamp_(0.0, 1.0))
+        return results
 
-            self._chamfer(arr, ch)          # 倒角（就地）
+    def pad_edges(
+        self,
+        image_1,
+        pad_px,
+        blend_pct,
+        pad_sigma,
+        blend_sigma,
+        chamfer_pct,
+        **kwargs,
+    ):
+        images = collect_image_inputs(image_1, kwargs)
+        pad_px = int(pad_px)
+        if pad_px < 1:
+            raise ValueError("pad_px must be at least 1.")
 
-            canvas = np.concatenate([top_pads[i], arr, bot_pads[i]], axis=0)
-            canvas = self._blend_junctions(canvas, pad_px, H, br, blend_sigma)
-            results_np.append(np.clip(canvas, 0.0, 1.0))
+        normalised = []
+        for index, image in enumerate(images, start=1):
+            if not isinstance(image, torch.Tensor):
+                raise TypeError(f"image_{index} must be a torch.Tensor.")
+            if image.ndim == 3:
+                image = image.unsqueeze(0)
+            if image.ndim != 4:
+                raise ValueError(
+                    f"image_{index} must have shape [B, H, W, C], "
+                    f"got {tuple(image.shape)}."
+                )
+            if image.shape[0] < 1 or image.shape[1] < 1 or image.shape[2] < 1:
+                raise ValueError(
+                    f"image_{index} has an empty batch or spatial dimension."
+                )
+            if not torch.is_floating_point(image):
+                raise TypeError(f"image_{index} must use a floating-point dtype.")
+            normalised.append(image)
 
-        # ── 补齐输出槽 ────────────────────────────────────────────────────────
-        empty = np.zeros((1, 1, 3), dtype=np.float32)
-        out = []
-        for i in range(self.MAX_INPUTS):
-            arr = results_np[i] if i < N else empty
-            out.append(torch.from_numpy(arr).unsqueeze(0))
-        return tuple(out)
+        channel_counts = {int(image.shape[-1]) for image in normalised}
+        if len(channel_counts) != 1:
+            raise ValueError(
+                "EdgePad inputs must use the same channel count; "
+                f"got {sorted(channel_counts)}."
+            )
 
-__all__ = [
-    "WuddEdgePad",
-]
+        batch_size = max(int(image.shape[0]) for image in normalised)
+        invalid_batches = [
+            int(image.shape[0])
+            for image in normalised
+            if int(image.shape[0]) not in (1, batch_size)
+        ]
+        if invalid_batches:
+            sizes = [int(image.shape[0]) for image in normalised]
+            raise ValueError(
+                "EdgePad batch sizes must match or be 1 for broadcasting; "
+                f"got {sizes}."
+            )
+
+        expanded = [
+            image.expand(batch_size, -1, -1, -1)
+            if image.shape[0] == 1 and batch_size > 1
+            else image
+            for image in normalised
+        ]
+        results = self._pad_batches(
+            expanded,
+            pad_px,
+            float(blend_pct),
+            float(pad_sigma),
+            float(blend_sigma),
+            float(chamfer_pct),
+        )
+
+        first = normalised[0]
+        empty = torch.zeros(
+            (1, 1, 1, first.shape[-1]),
+            device=first.device,
+            dtype=first.dtype,
+        )
+        return tuple(
+            results[index] if index < len(results) else empty
+            for index in range(self.MAX_INPUTS)
+        )
+
+
+__all__ = ["WuddEdgePad"]

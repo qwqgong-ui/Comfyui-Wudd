@@ -1,0 +1,1 @@
+"""Image node schemas."""

@@ -4,51 +4,6 @@ from .openrouter_common import *
 
 
 class WuddOpenRouterClaudeText(_OpenRouterBase):
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "prompt": ("STRING", {"default": "", "multiline": True}),
-                "api_key": ("STRING", {"default": ""}),
-                "model": (CLAUDE_TEXT_MODELS, {"default": "anthropic/claude-sonnet-4.6"}),
-                "max_tokens": (
-                    "INT",
-                    {"default": 4096, "min": 16, "max": 128000, "step": 1},
-                ),
-                "temperature": (
-                    "FLOAT",
-                    {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01},
-                ),
-                "top_p": (
-                    "FLOAT",
-                    {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01},
-                ),
-                "top_k": (
-                    "INT",
-                    {"default": 0, "min": 0, "max": 1000, "step": 1},
-                ),
-                "verbosity": (["none", "low", "medium", "high", "xhigh", "max"], {"default": "none"}),
-                "reasoning_effort": (REASONING_EFFORTS, {"default": "none"}),
-                "include_reasoning": ("BOOLEAN", {"default": False}),
-                **_api_runtime_inputs(),
-            },
-            "optional": {
-                **_system_and_extra_inputs(),
-                "stop_sequences": (
-                    "STRING",
-                    {
-                        "default": "",
-                        "multiline": True,
-                        "advanced": True,
-                    },
-                ),
-            },
-        }
-
-    RETURN_TYPES = ("STRING", "STRING", "STRING")
-    RETURN_NAMES = ("text", "reasoning", "response_id")
-    CATEGORY = TEXT_CATEGORY
-
     async def generate(
         self,
         prompt,

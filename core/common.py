@@ -16,9 +16,6 @@ from PIL import Image
 from io import BytesIO
 
 
-# ComfyUI 菜单下的统一分类名；集中声明，重命名只改一处。
-WUDD_CATEGORY = "Wudd Nodes"
-
 # Windows 下隐藏 cjpegli 弹出的黑框；非 Windows 上此 flag 为 0（no-op）。
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 

@@ -1,26 +1,8 @@
 """Core implementation for WuddMultiTextSplitter."""
-import re
-
-from .common import WUDD_CATEGORY
-
 class WuddMultiTextSplitter:
     MAX_OUTPUTS = 16  # JS 端同步保持此上限
 
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "text": ("STRING", {"multiline": True, "default": ""}),
-                "count": ("INT", {"default": 2, "min": 1, "max": cls.MAX_OUTPUTS}),
-                "skip_empty": ("BOOLEAN", {"default": False}),
-            }
-        }
-
     # 固定声明最大数量；JS 动态隐藏多余的输出槽
-    RETURN_TYPES = ("STRING",) * MAX_OUTPUTS
-    RETURN_NAMES = tuple(f"line_{i}" for i in range(MAX_OUTPUTS))
-    FUNCTION = "split_text"
-    CATEGORY = WUDD_CATEGORY
 
     def split_text(self, text, count, skip_empty=False):
         lines = text.splitlines()

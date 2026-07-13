@@ -1,6 +1,5 @@
 numpy>=1.25.0
 Pillow
-scipy
 av>=14.2.0
 imageio-ffmpeg>=0.5.1
 playwright>=1.44.0

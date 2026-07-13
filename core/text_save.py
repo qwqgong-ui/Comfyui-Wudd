@@ -6,30 +6,10 @@ import os
 
 import folder_paths
 
-from .common import WUDD_CATEGORY
-
 
 class WuddSaveText:
     ROOT_DIRS = ("output", "input", "temp")
     SAVE_MODES = ("overwrite", "append", "new_only")
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "text": ("STRING", {"multiline": True, "default": ""}),
-                "root_dir": (cls.ROOT_DIRS, {"default": "output"}),
-                "file": ("STRING", {"default": "Wudd_Text.txt"}),
-                "append": (cls.SAVE_MODES, {"default": "overwrite"}),
-                "insert": ("BOOLEAN", {"default": False}),
-            },
-        }
-
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("path",)
-    FUNCTION = "save_text"
-    OUTPUT_NODE = True
-    CATEGORY = WUDD_CATEGORY
 
     @classmethod
     def _root_directory(cls, root_dir):

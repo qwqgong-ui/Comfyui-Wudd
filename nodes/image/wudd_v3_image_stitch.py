@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ._base import *
+from .._base import *
 
 
 class WuddV3ImageStitch(_BackendNode, IO.ComfyNode):
@@ -8,17 +8,17 @@ class WuddV3ImageStitch(_BackendNode, IO.ComfyNode):
 
     @classmethod
     def define_schema(cls):
-        return IO.Schema(
+        return _with_help(IO.Schema(
             node_id="WuddV3ImageStitch",
             display_name="Wudd V3 Image Stitch",
-            category=WUDD_V3_CATEGORY,
+            category=IMAGE_CATEGORY,
             inputs=[
                 _image_autogrow("images", IMAGE_16_NAMES, min_count=1),
                 IO.Combo.Input("direction", options=["right", "down", "left", "up"], default="right"),
                 IO.Int.Input("gap", default=0, min=0, max=256, step=1),
             ],
             outputs=[IO.Image.Output("image", display_name="image")],
-        )
+        ))
 
     @classmethod
     async def execute(cls, images: IO.Autogrow.Type, direction="right", gap=0) -> IO.NodeOutput:
